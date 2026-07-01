@@ -48,7 +48,7 @@ export default function Landing() {
       setError(result.error || "Unable to sign in.");
       return;
     }
-    const pendingDriveReviews = await api.getPendingDriveReviews();
+    const pendingDriveReviews = await api.getPendingDriveReviews().catch(() => []);
     navigate(pendingDriveReviews.length ? "/experts" : "/dashboard");
   };
 

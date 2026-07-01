@@ -84,23 +84,36 @@ export function TasksProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | undefined;
+    let cancelled = false;
 
     async function startGoogleDrivePolling() {
-      const config = await api.getGoogleDriveSettings();
-      const minutes = Math.max(1, Number(config?.scanIntervalMinutes || 5));
+      try {
+        const config = await api.getGoogleDriveSettings();
+        if (cancelled || !config?.autoScanEnabled) return;
+        const minutes = Math.max(1, Number(config?.scanIntervalMinutes || 5));
 
-      interval = setInterval(
-        () => {
-          syncGoogleDriveInBackground(addTask, updateTask);
-        },
-        minutes * 60 * 1000,
-      );
+        interval = setInterval(
+          () => {
+            syncGoogleDriveInBackground(addTask, updateTask);
+          },
+          minutes * 60 * 1000,
+        );
+      } catch (error: any) {
+        if (!String(error?.message || "").toLowerCase().includes("authentication")) {
+          console.warn("Google Drive polling could not start:", error);
+        }
+      }
     }
 
-    syncGoogleDriveInBackground(addTask, updateTask);
+    syncGoogleDriveInBackground(addTask, updateTask).catch((error) => {
+      if (!String(error?.message || "").toLowerCase().includes("authentication")) {
+        console.warn("Google Drive background sync could not start:", error);
+      }
+    });
     startGoogleDrivePolling();
 
     return () => {
+      cancelled = true;
       if (interval) clearInterval(interval);
     };
   }, []);
