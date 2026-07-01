@@ -32,6 +32,9 @@ export default function Settings() {
     cvFolderId: '',
     apiKeyConfigured: false,
     serviceAccountConfigured: false,
+    oauthConfigured: false,
+    oauthConnected: false,
+    oauthEmail: '',
     scanIntervalMinutes: 5,
     autoScanEnabled: false
   });
@@ -70,6 +73,9 @@ export default function Settings() {
           cvFolderId: config.cvFolderId || config.folderId || '',
           apiKeyConfigured: Boolean(config.apiKeyConfigured),
           serviceAccountConfigured: Boolean(config.serviceAccountConfigured),
+          oauthConfigured: Boolean(config.oauthConfigured),
+          oauthConnected: Boolean(config.oauthConnected),
+          oauthEmail: config.oauthEmail || '',
           scanIntervalMinutes: Number(config.scanIntervalMinutes || 5),
           autoScanEnabled: Boolean(config.autoScanEnabled)
         });
@@ -130,6 +136,9 @@ export default function Settings() {
       ...driveSettings,
       apiKeyConfigured: config.apiKeyConfigured,
       serviceAccountConfigured: config.serviceAccountConfigured,
+      oauthConfigured: config.oauthConfigured,
+      oauthConnected: config.oauthConnected,
+      oauthEmail: config.oauthEmail,
       scanIntervalMinutes: Number(driveSettings.scanIntervalMinutes || 5),
     };
     await api.saveGoogleDriveSettings(newConfig);
@@ -158,6 +167,29 @@ export default function Settings() {
     } finally {
       setIsScanningDrive(false);
     }
+  };
+
+  const refreshDriveSettings = async () => {
+    const config = await api.getGoogleDriveSettings();
+    setDriveSettings((prev) => ({
+      ...prev,
+      cvFolderId: config.cvFolderId || config.folderId || prev.cvFolderId,
+      apiKeyConfigured: Boolean(config.apiKeyConfigured),
+      serviceAccountConfigured: Boolean(config.serviceAccountConfigured),
+      oauthConfigured: Boolean(config.oauthConfigured),
+      oauthConnected: Boolean(config.oauthConnected),
+      oauthEmail: config.oauthEmail || '',
+    }));
+  };
+
+  const handleConnectDrive = async () => {
+    await handleSave();
+    window.location.href = '/api/google-drive/oauth/start';
+  };
+
+  const handleDisconnectDrive = async () => {
+    await fetch('/api/google-drive/oauth', { method: 'DELETE', credentials: 'include' });
+    await refreshDriveSettings();
   };
 
   const handleBrandingUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'header' | 'footer') => {
@@ -499,19 +531,42 @@ export default function Settings() {
                       <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                         <div className="flex items-center justify-between gap-3">
                           <div>
-                            <h4 className="text-sm font-semibold text-slate-900">Server Drive credentials</h4>
+                            <h4 className="text-sm font-semibold text-slate-900">Google Drive OAuth</h4>
                             <p className="text-xs text-slate-500 mt-1">
-                              Credentials are configured on the server, not saved in the browser.
+                              Connect a Google account once, then this app can scan the selected folder.
                             </p>
+                            {driveSettings.oauthEmail && (
+                              <p className="text-xs font-medium text-slate-700 mt-1">{driveSettings.oauthEmail}</p>
+                            )}
                           </div>
                           <span className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
-                            driveSettings.serviceAccountConfigured || driveSettings.apiKeyConfigured
+                            driveSettings.oauthConnected || driveSettings.serviceAccountConfigured || driveSettings.apiKeyConfigured
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
                               : 'bg-amber-50 text-amber-700 border border-amber-200'
                           }`}>
                             <CheckCircle2 size={14} />
-                            {driveSettings.serviceAccountConfigured || driveSettings.apiKeyConfigured ? 'Configured' : 'Not configured'}
+                            {driveSettings.oauthConnected ? 'Connected' : driveSettings.oauthConfigured ? 'Ready to connect' : 'OAuth not configured'}
                           </span>
+                        </div>
+                        <div className="mt-4 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={handleConnectDrive}
+                            disabled={!driveSettings.oauthConfigured}
+                            className="inline-flex items-center gap-2 rounded-lg bg-[#004b87] px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-900 disabled:bg-slate-300"
+                          >
+                            <Cloud size={14} />
+                            {driveSettings.oauthConnected ? 'Reconnect Google Drive' : 'Connect Google Drive'}
+                          </button>
+                          {driveSettings.oauthConnected && (
+                            <button
+                              type="button"
+                              onClick={handleDisconnectDrive}
+                              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              Disconnect
+                            </button>
+                          )}
                         </div>
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
@@ -543,7 +598,7 @@ export default function Settings() {
                       <div className="mt-2 text-sm">
                         <details className="group border border-slate-200 rounded-lg bg-slate-50 overflow-hidden">
                           <summary className="cursor-pointer px-4 py-2 font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 transition-colors list-none flex justify-between items-center">
-                            How to connect Google Drive
+                            How to create OAuth credentials
                             <span className="text-slate-400 group-open:rotate-180 transition-transform">▼</span>
                           </summary>
                           <div className="p-4 space-y-4 text-slate-600 text-xs">
@@ -551,10 +606,11 @@ export default function Settings() {
                               <h4 className="font-bold text-slate-800 mb-1">Recommended setup</h4>
                               <ol className="list-decimal list-inside space-y-1 ml-1">
                                 <li>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">Google Cloud Console</a> &gt; Credentials.</li>
-                                <li>Click <strong>Create Credentials</strong> &gt; <strong>Service Account</strong>.</li>
-                                <li>Go to the new Service Account &gt; <strong>Keys</strong> tab &gt; <strong>Add Key</strong> &gt; <strong>JSON</strong>.</li>
-                                <li>Save the JSON content as the server environment variable <strong>GOOGLE_SERVICE_ACCOUNT_JSON</strong>.</li>
-                                <li>Share the CV folder with the service account email, then paste only the folder ID above.</li>
+                                <li>Enable the <strong>Google Drive API</strong>.</li>
+                                <li>Configure the OAuth consent screen.</li>
+                                <li>Create <strong>OAuth client ID</strong> credentials for a web application.</li>
+                                <li>Add this redirect URI: <strong>{window.location.origin}/api/google-drive/oauth/callback</strong>.</li>
+                                <li>Save the client ID and secret as <strong>GOOGLE_CLIENT_ID</strong> and <strong>GOOGLE_CLIENT_SECRET</strong>.</li>
                               </ol>
                             </div>
                           </div>

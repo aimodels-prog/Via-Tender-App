@@ -124,6 +124,17 @@ function normalizeDeadline(value: any) {
 }
 
 async function createDriveClient() {
+  const oauthTokens = await getSetting("googleDriveOAuth", null);
+  if (oauthTokens?.refresh_token && process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET) {
+    const auth = new google.auth.OAuth2(
+      process.env.GOOGLE_CLIENT_ID,
+      process.env.GOOGLE_CLIENT_SECRET,
+      process.env.GOOGLE_REDIRECT_URI,
+    );
+    auth.setCredentials(oauthTokens);
+    return google.drive({ version: "v3", auth });
+  }
+
   const rawCredentials = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
   const apiKey = process.env.GOOGLE_API_KEY;
   const delegatedUserEmail = process.env.GOOGLE_DELEGATED_USER_EMAIL;
@@ -146,7 +157,19 @@ async function createDriveClient() {
   }
 
   if (apiKey) return google.drive({ version: "v3", auth: apiKey });
-  throw new Error("Google Drive credentials are not configured on the server.");
+  throw new Error("Google Drive is not connected. Connect Google Drive in Settings.");
+}
+
+function createGoogleOAuthClient(req?: Request) {
+  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+    throw new Error("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required for Google Drive OAuth.");
+  }
+
+  const redirectUri =
+    process.env.GOOGLE_REDIRECT_URI ||
+    `${req?.protocol || "http"}://${req?.get("host") || `localhost:${process.env.PORT || 3000}`}/api/google-drive/oauth/callback`;
+
+  return new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, redirectUri);
 }
 
 async function startServer() {
@@ -156,6 +179,7 @@ async function startServer() {
   const PORT = Number(process.env.PORT || 3000);
   const upload = multer({ dest: "uploads/" });
 
+  app.set("trust proxy", 1);
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(express.json({ limit: "50mb" }));
   app.use(cookieParser());
@@ -320,8 +344,12 @@ async function startServer() {
   app.get("/api/settings/:key", requireAuth, async (req, res) => {
     const value = await getSetting(req.params.key);
     if (req.params.key === "googleDrive") {
+      const oauthTokens = await getSetting("googleDriveOAuth", null);
       return res.json({
         ...(value || {}),
+        oauthConnected: Boolean(oauthTokens?.refresh_token),
+        oauthEmail: oauthTokens?.email || "",
+        oauthConfigured: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
         serviceAccountConfigured: Boolean(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),
         apiKeyConfigured: Boolean(process.env.GOOGLE_API_KEY),
       });
@@ -351,6 +379,87 @@ async function startServer() {
 
   app.get("/api/lookups", requireAuth, async (_req, res) => {
     res.json(await getSetting("lookups", {}));
+  });
+
+  app.get("/api/google-drive/oauth/status", requireAuth, async (_req, res) => {
+    const tokens = await getSetting("googleDriveOAuth", null);
+    res.json({
+      connected: Boolean(tokens?.refresh_token),
+      email: tokens?.email || "",
+      connectedAt: tokens?.connectedAt || null,
+      oauthConfigured: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
+    });
+  });
+
+  app.get("/api/google-drive/oauth/start", requireAuth, requireAdmin, async (req, res) => {
+    try {
+      const state = uuidv4();
+      const auth = createGoogleOAuthClient(req);
+      res.cookie("google_drive_oauth_state", state, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        maxAge: 10 * 60 * 1000,
+      });
+      const url = auth.generateAuthUrl({
+        access_type: "offline",
+        prompt: "consent",
+        scope: [
+          "https://www.googleapis.com/auth/drive.readonly",
+          "https://www.googleapis.com/auth/userinfo.email",
+        ],
+        state,
+      });
+      res.redirect(url);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/google-drive/oauth/callback", async (req, res) => {
+    try {
+      const state = String(req.query.state || "");
+      const expectedState = req.cookies?.google_drive_oauth_state;
+      if (!state || !expectedState || state !== expectedState) {
+        return res.status(400).send("Invalid Google Drive OAuth state.");
+      }
+
+      const code = String(req.query.code || "");
+      if (!code) return res.status(400).send("Google Drive OAuth code is missing.");
+
+      const auth = createGoogleOAuthClient(req);
+      const { tokens } = await auth.getToken(code);
+      auth.setCredentials(tokens);
+
+      let email = "";
+      try {
+        const oauth2 = google.oauth2({ version: "v2", auth });
+        const userInfo = await oauth2.userinfo.get();
+        email = userInfo.data.email || "";
+      } catch {
+        email = "";
+      }
+
+      const existingTokens = await getSetting("googleDriveOAuth", {});
+      await saveSetting("googleDriveOAuth", {
+        ...existingTokens,
+        ...tokens,
+        refresh_token: tokens.refresh_token || existingTokens.refresh_token,
+        email,
+        connectedAt: new Date().toISOString(),
+      });
+      await writeLog("Google Drive Connected", email ? `Connected Google Drive for ${email}` : "Connected Google Drive");
+      res.clearCookie("google_drive_oauth_state");
+      res.redirect("/settings?tab=integrations&drive=connected");
+    } catch (error: any) {
+      res.status(500).send(`Google Drive OAuth failed: ${error.message}`);
+    }
+  });
+
+  app.delete("/api/google-drive/oauth", requireAuth, requireAdmin, async (_req, res) => {
+    await saveSetting("googleDriveOAuth", {});
+    await writeLog("Google Drive Disconnected", "Removed Google Drive OAuth tokens");
+    res.json({ success: true });
   });
 
   app.get("/api/google-drive/list", requireAuth, async (_req, res) => {

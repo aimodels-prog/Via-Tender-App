@@ -134,8 +134,8 @@ export async function scanGoogleDriveNow(addTask?: any, updateTask?: any) {
   if (!config?.cvFolderId) {
     throw new Error("Add a Google Drive CV folder ID before scanning.");
   }
-  if (!config?.apiKeyConfigured && !config?.serviceAccountConfigured) {
-    throw new Error("Google Drive credentials must be configured on the server.");
+  if (!config?.oauthConnected && !config?.apiKeyConfigured && !config?.serviceAccountConfigured) {
+    throw new Error("Connect Google Drive before scanning.");
   }
 
   const taskId = addTask?.({
