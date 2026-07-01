@@ -27,6 +27,7 @@ import { useTasks } from '../lib/TasksContext';
 import AddExpertModal from '../components/AddExpertModal';
 import { EditExpertRoleModal } from '../components/EditExpertRoleModal';
 import ConfirmModal from '../components/ConfirmModal';
+import InfoModal from '../components/InfoModal';
 import { PRIMARY_POSITIONS, ALL_PRIMARY_POSITIONS } from '../lib/constants';
 import { useAuth } from '../lib/auth';
 
@@ -78,6 +79,11 @@ export default function Experts() {
   const [pendingExtractedExperts, setPendingExtractedExperts] = useState<any[]>([]);
   const [isSavingExtractedExperts, setIsSavingExtractedExperts] = useState(false);
   const [showDiscardExtractionConfirm, setShowDiscardExtractionConfirm] = useState(false);
+  const [extractionNotice, setExtractionNotice] = useState<{
+    title: string;
+    message: string;
+    variant: 'success' | 'error' | 'info';
+  } | null>(null);
 
   const { tasks, addTask, updateTask } = useTasks();
 
@@ -566,9 +572,17 @@ export default function Experts() {
       await api.clearPendingDriveReviews(googleFileIds);
       setPendingExtractedExperts([]);
       fetchExperts();
-      alert(`Saved extraction. Added ${saveResult.added} and updated ${saveResult.updated} expert profiles.`);
+      setExtractionNotice({
+        title: "Extraction Saved",
+        message: `Added ${saveResult.added} and updated ${saveResult.updated} expert profiles.`,
+        variant: "success",
+      });
     } catch (err: any) {
-      alert("Save failed: " + err.message);
+      setExtractionNotice({
+        title: "Save Failed",
+        message: err.message || "The extracted expert profiles could not be saved.",
+        variant: "error",
+      });
     } finally {
       setIsSavingExtractedExperts(false);
     }
@@ -1477,6 +1491,14 @@ export default function Experts() {
         isDestructive={true}
         onConfirm={confirmDiscardExtractedExperts}
         onCancel={() => setShowDiscardExtractionConfirm(false)}
+      />
+
+      <InfoModal
+        isOpen={!!extractionNotice}
+        title={extractionNotice?.title || ""}
+        message={extractionNotice?.message || ""}
+        variant={extractionNotice?.variant || "info"}
+        onClose={() => setExtractionNotice(null)}
       />
       
       <AnimatePresence>
