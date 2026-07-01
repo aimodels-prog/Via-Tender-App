@@ -2,11 +2,9 @@ import React, {
   createContext,
   useContext,
   useState,
+  useCallback,
   ReactNode,
-  useEffect,
 } from "react";
-import { syncGoogleDriveInBackground } from "./googleDriveSync";
-import { api } from "./api";
 
 export type TaskType = "UPLOAD" | "MATCH" | "GENERATE";
 
@@ -44,16 +42,16 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     }
   });
 
-  const setPendingTender = (tender: any | null) => {
+  const setPendingTender = useCallback((tender: any | null) => {
     if (tender) {
       localStorage.setItem("pendingTender", JSON.stringify(tender));
     } else {
       localStorage.removeItem("pendingTender");
     }
     setPendingTenderState(tender);
-  };
+  }, []);
 
-  const addTask = (
+  const addTask = useCallback((
     task: Omit<AppTask, "id" | "status" | "percent" | "eta">,
   ) => {
     const id = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -66,56 +64,20 @@ export function TasksProvider({ children }: { children: ReactNode }) {
     };
     setTasks((prev) => [...prev, newTask]);
     return id;
-  };
+  }, []);
 
-  const updateTask = (id: string, updates: Partial<AppTask>) => {
+  const updateTask = useCallback((id: string, updates: Partial<AppTask>) => {
     setTasks((prev) =>
       prev.map((t) => (t.id === id ? { ...t, ...updates } : t)),
     );
-  };
+  }, []);
 
-  const removeTask = (id: string) => {
+  const removeTask = useCallback((id: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== id));
-  };
+  }, []);
 
-  const clearCompleted = () => {
+  const clearCompleted = useCallback(() => {
     setTasks((prev) => prev.filter((t) => t.status === "running"));
-  };
-
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval> | undefined;
-    let cancelled = false;
-
-    async function startGoogleDrivePolling() {
-      try {
-        const config = await api.getGoogleDriveSettings();
-        if (cancelled || !config?.autoScanEnabled) return;
-        const minutes = Math.max(1, Number(config?.scanIntervalMinutes || 5));
-
-        interval = setInterval(
-          () => {
-            syncGoogleDriveInBackground(addTask, updateTask);
-          },
-          minutes * 60 * 1000,
-        );
-      } catch (error: any) {
-        if (!String(error?.message || "").toLowerCase().includes("authentication")) {
-          console.warn("Google Drive polling could not start:", error);
-        }
-      }
-    }
-
-    syncGoogleDriveInBackground(addTask, updateTask).catch((error) => {
-      if (!String(error?.message || "").toLowerCase().includes("authentication")) {
-        console.warn("Google Drive background sync could not start:", error);
-      }
-    });
-    startGoogleDrivePolling();
-
-    return () => {
-      cancelled = true;
-      if (interval) clearInterval(interval);
-    };
   }, []);
 
   return (

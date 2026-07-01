@@ -16,22 +16,49 @@ import Settings from "./pages/Settings";
 import TenderDetails from "./pages/TenderDetails";
 import { Search, Menu } from "lucide-react";
 
-import { TasksProvider } from "./lib/TasksContext";
+import { TasksProvider, useTasks } from "./lib/TasksContext";
 import { AuthProvider, useAuth } from "./lib/auth";
 import TasksOverlay from "./components/TasksOverlay";
 import NotificationPanel from "./components/NotificationPanel";
 import { GlobalModals } from "./components/GlobalModals";
 import { useState, useEffect } from "react";
+import { api } from "./lib/api";
+import { syncGoogleDriveInBackground } from "./lib/googleDriveSync";
 
 function AppShell() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const location = useLocation();
   const { isAuthenticated, isLoading } = useAuth();
+  const { addTask, updateTask } = useTasks();
 
   useEffect(() => {
-    // Optionally keep loadSettings placeholder if it's doing nothing,
-    // actually let's just leave the standard layout and ignore settings reload since nothing else uses it
-  }, []);
+    if (!isAuthenticated) return;
+    let interval: ReturnType<typeof setInterval> | undefined;
+    let cancelled = false;
+
+    async function startGoogleDrivePolling() {
+      try {
+        const config = await api.getGoogleDriveSettings();
+        if (cancelled || !config?.autoScanEnabled) return;
+
+        await syncGoogleDriveInBackground(addTask, updateTask);
+        const minutes = Math.max(1, Number(config?.scanIntervalMinutes || 5));
+        interval = setInterval(() => {
+          syncGoogleDriveInBackground(addTask, updateTask).catch((error) => {
+            console.warn("Google Drive background sync could not start:", error);
+          });
+        }, minutes * 60 * 1000);
+      } catch (error) {
+        console.warn("Google Drive polling could not start:", error);
+      }
+    }
+
+    startGoogleDrivePolling();
+    return () => {
+      cancelled = true;
+      if (interval) clearInterval(interval);
+    };
+  }, [isAuthenticated, addTask, updateTask]);
 
   if (isLoading) {
     return (
