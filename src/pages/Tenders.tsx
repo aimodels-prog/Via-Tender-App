@@ -387,7 +387,7 @@ export default function Tenders() {
       });
 
       clearInterval(interval);
-      setPendingTender({
+      await setPendingTender({
         ...parsedTender,
         _taskId: taskId, // Store task ID to finish it later
       });

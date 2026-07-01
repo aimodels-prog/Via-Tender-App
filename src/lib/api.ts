@@ -389,6 +389,22 @@ export const api = {
     return request("/api/lookups");
   },
 
+  getUserState: async (key: string, fallback: any = null) => {
+    const data = await request(`/api/user-state/${encodeURIComponent(key)}`);
+    return data.value ?? fallback;
+  },
+
+  saveUserState: async (key: string, value: any) => {
+    return request(`/api/user-state/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: jsonBody({ value }),
+    });
+  },
+
+  deleteUserState: async (key: string) => {
+    return request(`/api/user-state/${encodeURIComponent(key)}`, { method: "DELETE" });
+  },
+
   deleteExpert: async (id: string) => {
     return request(`/api/experts/${id}`, { method: "DELETE" });
   },

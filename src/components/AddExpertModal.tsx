@@ -75,7 +75,9 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
       .then((lookups) => {
         if (lookups.expertTypes?.length) setExpertTypes(lookups.expertTypes);
       })
-      .catch(() => {});
+      .catch((error) => {
+        console.warn('Expert type lookup values could not be loaded:', error);
+      });
   }, []);
 
   React.useEffect(() => {

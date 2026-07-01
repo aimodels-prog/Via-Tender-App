@@ -61,6 +61,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setIsLoading(true);
     const result = await authRequest("/api/auth/me");
     setCurrentUser(result.user ? normalizeUser(result.user) : null);
+    window.dispatchEvent(new Event("authChanged"));
     setIsLoading(false);
   };
 
@@ -72,6 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const result = await authRequest("/api/auth/login", { email, password });
     if (!result.success) return { success: false, error: result.error };
     setCurrentUser(normalizeUser(result.user));
+    window.dispatchEvent(new Event("authChanged"));
     window.dispatchEvent(new Event("settingsUpdated"));
     return { success: true };
   };
@@ -90,13 +92,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const result = await authRequest("/api/auth/register", { name, email, password });
     if (!result.success) return { success: false, error: result.error };
     setCurrentUser(normalizeUser(result.user));
+    window.dispatchEvent(new Event("authChanged"));
     return { success: true };
   };
 
   const logout = () => {
     setCurrentUser(null);
+    window.dispatchEvent(new Event("authChanged"));
     fetch("/api/auth/logout", { method: "POST", credentials: "include" })
-      .catch(() => {})
+      .catch((error) => {
+        console.error("Logout request failed:", error);
+      })
       .finally(() => {
         window.location.replace("/");
       });

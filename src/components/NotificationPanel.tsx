@@ -12,12 +12,16 @@ export default function NotificationPanel() {
   useEffect(() => {
     // Basic polling or just initial fetch to check for new logs
     const checkLogs = async () => {
-      const data = await api.getLogs();
-      const lastCheck = localStorage.getItem('lastNotificationCheck');
-      if (data.length > 0) {
-        if (!lastCheck || new Date(data[0].timestamp).getTime() > parseInt(lastCheck)) {
-          setHasNew(true);
+      try {
+        const data = await api.getLogs();
+        const lastCheck = await api.getUserState('lastNotificationCheck', null);
+        if (data.length > 0) {
+          if (!lastCheck || new Date(data[0].timestamp).getTime() > Number(lastCheck)) {
+            setHasNew(true);
+          }
         }
+      } catch (error) {
+        console.warn('Notification logs could not be checked:', error);
       }
     };
     checkLogs();
@@ -30,11 +34,15 @@ export default function NotificationPanel() {
 
   useEffect(() => {
     const fetchLogs = async () => {
-      const data = await api.getLogs();
-      setLogs(data.slice(0, 50));
-      if (isOpen) {
-        setHasNew(false);
-        localStorage.setItem('lastNotificationCheck', Date.now().toString());
+      try {
+        const data = await api.getLogs();
+        setLogs(data.slice(0, 50));
+        if (isOpen) {
+          setHasNew(false);
+          await api.saveUserState('lastNotificationCheck', Date.now());
+        }
+      } catch (error) {
+        console.warn('Notification logs could not be loaded:', error);
       }
     };
     if (isOpen) {

@@ -16,6 +16,7 @@ import { Link, useLocation } from 'react-router-dom';
 import clsx from 'clsx';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../lib/auth';
+import { api } from '../lib/api';
 
 function SidebarItem({ to, icon: Icon, label, onClick, isCollapsed }: { to: string, icon: any, label: string, onClick?: () => void, isCollapsed: boolean }) {
   const location = useLocation();
@@ -47,19 +48,25 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen?: boolean, setIs
   const [hiddenModules, setHiddenModules] = useState<string[]>(['matches', 'generated-cvs']);
 
   useEffect(() => {
-    const loadSettings = () => {
-      const hm = localStorage.getItem('hidden_modules_prefs');
-      if (hm) {
-        try {
-          setHiddenModules(JSON.parse(hm));
-        } catch (e) {}
+    const loadSettings = async () => {
+      try {
+        setHiddenModules(await api.getUserState('hiddenModules', ['matches', 'generated-cvs']));
+      } catch (error: any) {
+        if (!String(error?.message || '').toLowerCase().includes('authentication')) {
+          console.warn('Module preferences could not be loaded:', error);
+        }
       }
     };
     
     loadSettings();
-    window.addEventListener('settingsUpdated', loadSettings);
+    const handleSettingsUpdated = () => {
+      loadSettings();
+    };
+    window.addEventListener('settingsUpdated', handleSettingsUpdated);
+    window.addEventListener('authChanged', handleSettingsUpdated);
     return () => {
-      window.removeEventListener('settingsUpdated', loadSettings);
+      window.removeEventListener('settingsUpdated', handleSettingsUpdated);
+      window.removeEventListener('authChanged', handleSettingsUpdated);
     };
   }, []);
 

@@ -97,6 +97,16 @@ export async function initPostgres() {
   `);
 
   await query(`
+    create table if not exists user_preferences (
+      user_id uuid not null references users(id) on delete cascade,
+      key text not null,
+      value jsonb not null default 'null'::jsonb,
+      updated_at timestamptz not null default now(),
+      primary key (user_id, key)
+    )
+  `);
+
+  await query(`
     create table if not exists experts (
       id text primary key,
       full_name text,

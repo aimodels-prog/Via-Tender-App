@@ -22,8 +22,7 @@ export default function DeadlineWarningBanner() {
     const checkDeadlines = async () => {
       try {
         const today = new Date().toDateString();
-        let ackDataStr = localStorage.getItem('deadlineAck');
-        let ackInfo = ackDataStr ? JSON.parse(ackDataStr) : { date: '', count: 0, firstTime: 0 };
+        let ackInfo = await api.getUserState('deadlineAck', { date: '', count: 0, firstTime: 0 });
 
         if (ackInfo.date !== today) {
           ackInfo = { date: today, count: 0, firstTime: 0 };
@@ -53,10 +52,9 @@ export default function DeadlineWarningBanner() {
     checkDeadlines();
   }, []);
 
-  const handleAcknowledge = () => {
+  const handleAcknowledge = async () => {
     const today = new Date().toDateString();
-    let ackDataStr = localStorage.getItem('deadlineAck');
-    let ackInfo = ackDataStr ? JSON.parse(ackDataStr) : { date: '', count: 0, firstTime: 0 };
+    let ackInfo = await api.getUserState('deadlineAck', { date: '', count: 0, firstTime: 0 });
 
     if (ackInfo.date !== today) {
       ackInfo = { date: today, count: 0, firstTime: 0 };
@@ -67,7 +65,7 @@ export default function DeadlineWarningBanner() {
       ackInfo.firstTime = new Date().getTime();
     }
     
-    localStorage.setItem('deadlineAck', JSON.stringify(ackInfo));
+    await api.saveUserState('deadlineAck', ackInfo);
     setIsOpen(false);
   };
 
@@ -87,12 +85,24 @@ export default function DeadlineWarningBanner() {
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={handleAcknowledge}
+            onClick={async () => {
+              try {
+                await handleAcknowledge();
+              } catch (error) {
+                console.error("Failed to acknowledge deadline warning:", error);
+              }
+            }}
             className="px-3 py-1.5 text-xs font-medium text-rose-700 bg-rose-100 hover:bg-rose-200 rounded-lg transition-colors border border-transparent"
           >
             Acknowledge
           </button>
-          <button onClick={handleAcknowledge} className="text-rose-400 hover:text-rose-600 rounded-lg hover:bg-rose-100 p-1 transition-colors">
+          <button onClick={async () => {
+            try {
+              await handleAcknowledge();
+            } catch (error) {
+              console.error("Failed to acknowledge deadline warning:", error);
+            }
+          }} className="text-rose-400 hover:text-rose-600 rounded-lg hover:bg-rose-100 p-1 transition-colors">
             <X size={18} />
           </button>
         </div>
@@ -113,8 +123,12 @@ export default function DeadlineWarningBanner() {
                   {daysLeft === 0 ? "Today" : `${daysLeft} Day${daysLeft > 1 ? 's' : ''} Left`}
                 </span>
                 <button
-                  onClick={() => {
-                    handleAcknowledge();
+                  onClick={async () => {
+                    try {
+                      await handleAcknowledge();
+                    } catch (error) {
+                      console.error("Failed to acknowledge deadline warning:", error);
+                    }
                     navigate(`/tenders/${tender.id}/details`);
                   }}
                   className="text-xs font-medium text-rose-600 hover:text-rose-800 flex items-center gap-1"

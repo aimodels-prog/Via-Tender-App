@@ -24,12 +24,16 @@ export default function Users() {
 
   useEffect(() => {
     fetchUsers();
-    api.getLookups().then((data) => {
-      setLookups({
-        roles: data.roles?.length ? data.roles : ['User', 'Admin'],
-        userStatuses: data.userStatuses?.length ? data.userStatuses : ['Active', 'Inactive'],
+    api.getLookups()
+      .then((data) => {
+        setLookups({
+          roles: data.roles?.length ? data.roles : ['User', 'Admin'],
+          userStatuses: data.userStatuses?.length ? data.userStatuses : ['Active', 'Inactive'],
+        });
+      })
+      .catch((error) => {
+        console.warn('User lookup values could not be loaded:', error);
       });
-    }).catch(() => {});
     function handleClickOutside(event: MouseEvent) {
       if (activeColumnMenuRef.current && !activeColumnMenuRef.current.contains(event.target as Node)) {
         setActiveColumnMenu(null);

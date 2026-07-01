@@ -19,7 +19,7 @@ export function GlobalModals() {
         });
       }
 
-      setPendingTender(null);
+      await setPendingTender(null);
       // Dispatch an event so Tenders.tsx can re-fetch if it is mounted
       window.dispatchEvent(new Event("tenders-updated"));
     } catch (err) {
@@ -33,14 +33,14 @@ export function GlobalModals() {
         <ConfirmTenderModal
           tender={pendingTender}
           onSave={confirmSaveTender}
-          onCancel={() => {
+          onCancel={async () => {
             if (pendingTender._taskId) {
               updateTask(pendingTender._taskId, {
                 status: "error",
                 message: "Tender insertion cancelled by user.",
               });
             }
-            setPendingTender(null);
+            await setPendingTender(null);
           }}
         />
       )}

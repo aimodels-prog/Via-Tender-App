@@ -3,8 +3,10 @@ import React, {
   useContext,
   useState,
   useCallback,
+  useEffect,
   ReactNode,
 } from "react";
+import { api } from "./api";
 
 export type TaskType = "UPLOAD" | "MATCH" | "GENERATE";
 
@@ -26,29 +28,35 @@ interface TasksContextType {
   removeTask: (id: string) => void;
   clearCompleted: () => void;
   pendingTender: any | null;
-  setPendingTender: (tender: any | null) => void;
+  setPendingTender: (tender: any | null) => Promise<void>;
 }
 
 const TasksContext = createContext<TasksContextType | undefined>(undefined);
 
 export function TasksProvider({ children }: { children: ReactNode }) {
   const [tasks, setTasks] = useState<AppTask[]>([]);
-  const [pendingTender, setPendingTenderState] = useState<any | null>(() => {
-    try {
-      const stored = localStorage.getItem("pendingTender");
-      return stored ? JSON.parse(stored) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [pendingTender, setPendingTenderState] = useState<any | null>(null);
 
-  const setPendingTender = useCallback((tender: any | null) => {
-    if (tender) {
-      localStorage.setItem("pendingTender", JSON.stringify(tender));
-    } else {
-      localStorage.removeItem("pendingTender");
+  const loadPendingTender = useCallback(async () => {
+    try {
+      setPendingTenderState(await api.getUserState("pendingTender", null));
+    } catch (error: any) {
+      if (!String(error?.message || "").toLowerCase().includes("authentication")) {
+        console.warn("Pending tender draft could not be loaded:", error);
+      }
     }
+  }, []);
+
+  useEffect(() => {
+    loadPendingTender();
+    window.addEventListener("authChanged", loadPendingTender);
+    return () => window.removeEventListener("authChanged", loadPendingTender);
+  }, [loadPendingTender]);
+
+  const setPendingTender = useCallback(async (tender: any | null) => {
     setPendingTenderState(tender);
+    if (tender) await api.saveUserState("pendingTender", tender);
+    else await api.deleteUserState("pendingTender");
   }, []);
 
   const addTask = useCallback((

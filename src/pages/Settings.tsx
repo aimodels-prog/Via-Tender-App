@@ -41,6 +41,7 @@ export default function Settings() {
   const [driveFiles, setDriveFiles] = useState<any[]>([]);
   const [isScanningDrive, setIsScanningDrive] = useState(false);
   const [driveScanMessage, setDriveScanMessage] = useState('');
+  const [settingsError, setSettingsError] = useState('');
   const [isSaved, setIsSaved] = useState(false);
   const [loading, setLoading] = useState(true);
   const [taxonomy, setTaxonomy] = useState<string[]>([]);
@@ -67,34 +68,36 @@ export default function Settings() {
 
   useEffect(() => {
     async function load() {
-      const config = await api.getGoogleDriveSettings();
-      if (config) {
-        setDriveSettings({
-          cvFolderId: config.cvFolderId || config.folderId || '',
-          apiKeyConfigured: Boolean(config.apiKeyConfigured),
-          serviceAccountConfigured: Boolean(config.serviceAccountConfigured),
-          oauthConfigured: Boolean(config.oauthConfigured),
-          oauthConnected: Boolean(config.oauthConnected),
-          oauthEmail: config.oauthEmail || '',
-          scanIntervalMinutes: Number(config.scanIntervalMinutes || 5),
-          autoScanEnabled: Boolean(config.autoScanEnabled)
+      try {
+        const config = await api.getGoogleDriveSettings();
+        if (config) {
+          setDriveSettings({
+            cvFolderId: config.cvFolderId || config.folderId || '',
+            apiKeyConfigured: Boolean(config.apiKeyConfigured),
+            serviceAccountConfigured: Boolean(config.serviceAccountConfigured),
+            oauthConfigured: Boolean(config.oauthConfigured),
+            oauthConnected: Boolean(config.oauthConnected),
+            oauthEmail: config.oauthEmail || '',
+            scanIntervalMinutes: Number(config.scanIntervalMinutes || 5),
+            autoScanEnabled: Boolean(config.autoScanEnabled)
+          });
+        }
+        setDriveFiles(await api.getDriveFiles());
+        const tax = await api.getTaxonomy();
+        setTaxonomy(tax || ALL_PRIMARY_POSITIONS);
+        const branding = await api.getGlobalBranding();
+        setGlobalBranding({
+          header_base64: branding.header_base64 || '',
+          footer_base64: branding.footer_base64 || '',
+          header_name: branding.header_name || '',
+          footer_name: branding.footer_name || ''
         });
+        setHiddenModules(await api.getUserState('hiddenModules', ['matches', 'generated-cvs']));
+      } catch (error: any) {
+        setSettingsError(error.message || 'Unable to load settings.');
+      } finally {
+        setLoading(false);
       }
-      setDriveFiles(await api.getDriveFiles());
-      const tax = await api.getTaxonomy();
-      setTaxonomy(tax || ALL_PRIMARY_POSITIONS);
-      const branding = await api.getGlobalBranding();
-      setGlobalBranding({
-        header_base64: branding.header_base64 || '',
-        footer_base64: branding.footer_base64 || '',
-        header_name: branding.header_name || '',
-        footer_name: branding.footer_name || ''
-      });
-
-      setLoading(false);
-      
-      const hm = localStorage.getItem('hidden_modules_prefs');
-      if (hm) setHiddenModules(JSON.parse(hm));
     }
     load();
   }, []);
@@ -263,13 +266,17 @@ export default function Settings() {
     setTimeout(() => setIsSaved(false), 3000);
   };
 
-  const toggleModule = (moduleName: string) => {
+  const toggleModule = async (moduleName: string) => {
     const next = hiddenModules.includes(moduleName)
       ? hiddenModules.filter(m => m !== moduleName)
       : [...hiddenModules, moduleName];
       
     setHiddenModules(next);
-    localStorage.setItem('hidden_modules_prefs', JSON.stringify(next));
+    try {
+      await api.saveUserState('hiddenModules', next);
+    } catch (error: any) {
+      setSettingsError(error.message || 'Unable to save module preferences.');
+    }
     window.dispatchEvent(new Event('settingsUpdated'));
   };
 
@@ -279,6 +286,12 @@ export default function Settings() {
         <h2 className="text-2xl font-bold text-slate-900">Settings</h2>
         <p className="text-sm text-slate-500 mt-1">Manage your account and system preferences</p>
       </div>
+
+      {settingsError && (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+          {settingsError}
+        </div>
+      )}
 
       <div className="flex flex-col md:flex-row gap-6 mt-8">
         {/* Sidebar */}

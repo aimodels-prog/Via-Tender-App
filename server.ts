@@ -395,6 +395,33 @@ async function startServer() {
     res.json(await getSetting("lookups", {}));
   });
 
+  app.get("/api/user-state/:key", requireAuth, async (req, res) => {
+    const result = await query(
+      `select value from user_preferences where user_id = $1 and key = $2`,
+      [req.user!.id, req.params.key],
+    );
+    res.json({ key: req.params.key, value: result.rows[0]?.value ?? null });
+  });
+
+  app.put("/api/user-state/:key", requireAuth, async (req, res) => {
+    const value = req.body?.value ?? null;
+    await query(
+      `insert into user_preferences (user_id, key, value, updated_at)
+       values ($1, $2, $3::jsonb, now())
+       on conflict (user_id, key) do update set value = excluded.value, updated_at = now()`,
+      [req.user!.id, req.params.key, JSON.stringify(value)],
+    );
+    res.json({ success: true, key: req.params.key, value });
+  });
+
+  app.delete("/api/user-state/:key", requireAuth, async (req, res) => {
+    await query(`delete from user_preferences where user_id = $1 and key = $2`, [
+      req.user!.id,
+      req.params.key,
+    ]);
+    res.json({ success: true });
+  });
+
   app.get("/api/google-drive/oauth/status", requireAuth, async (_req, res) => {
     const tokens = await getSetting("googleDriveOAuth", null);
     res.json({
