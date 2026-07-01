@@ -17,6 +17,7 @@ import clsx from 'clsx';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
+import viaLogo from '../assets/via-international-logo.png';
 
 function SidebarItem({ to, icon: Icon, label, onClick, isCollapsed }: { to: string, icon: any, label: string, onClick?: () => void, isCollapsed: boolean }) {
   const location = useLocation();
@@ -103,11 +104,12 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen?: boolean, setIs
 
         <div className={clsx("flex-1 flex flex-col overflow-hidden", isCollapsed ? "p-4" : "p-4 sm:p-6")}>
           <div className={clsx("flex items-center mb-8", isCollapsed ? "justify-center" : "justify-between")}>
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-[#004b87] rounded flex items-center justify-center shrink-0">
-                <span className="text-white font-bold text-lg leading-none">v</span>
-              </div>
-              {!isCollapsed && <h1 className="text-xl font-bold text-slate-900 truncate">VIA Int</h1>}
+            <div className={clsx("flex min-w-0 items-center", isCollapsed ? "justify-center" : "flex-1")}>
+              <img
+                src={viaLogo}
+                alt="VIA International"
+                className={clsx("object-contain", isCollapsed ? "h-7 w-11" : "h-12 w-36 object-left")}
+              />
             </div>
             {setIsOpen && !isCollapsed && (
               <button 

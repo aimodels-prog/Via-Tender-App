@@ -3,19 +3,19 @@ import { FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { api } from "../lib/api";
+import viaLogo from "../assets/via-international-logo.png";
 
 function ViaLogo() {
   return (
-    <div className="flex items-center gap-3">
-      <div className="flex h-11 w-11 items-center justify-center rounded bg-[#004b87] shadow-sm">
-        <span className="text-2xl font-bold leading-none text-white">v</span>
-      </div>
-      <div>
-        <p className="text-lg font-bold leading-tight text-slate-950">VIA Int</p>
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
-          CV Generation
-        </p>
-      </div>
+    <div className="flex flex-col items-center gap-2">
+      <img
+        src={viaLogo}
+        alt="VIA International"
+        className="h-16 w-auto object-contain"
+      />
+      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+        CV Generation
+      </p>
     </div>
   );
 }
@@ -67,16 +67,12 @@ export default function Landing() {
           <div className="absolute bottom-20 right-16 h-36 w-36 rounded-full border border-cyan-200/30" />
 
           <div className="relative z-10">
-            <div className="flex items-center gap-3">
-              <div className="flex h-12 w-12 items-center justify-center rounded bg-white shadow-sm">
-                <span className="text-3xl font-bold leading-none text-[#004b87]">v</span>
-              </div>
-              <div>
-                <p className="text-xl font-bold leading-tight">VIA Int</p>
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-100">
-                  CV Generation
-                </p>
-              </div>
+            <div className="inline-flex rounded-md bg-white px-5 py-4 shadow-sm">
+              <img
+                src={viaLogo}
+                alt="VIA International"
+                className="h-16 w-auto object-contain"
+              />
             </div>
           </div>
 
