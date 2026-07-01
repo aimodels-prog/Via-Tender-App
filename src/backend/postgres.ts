@@ -212,14 +212,19 @@ export async function initPostgres() {
 
   const count = await query<{ count: string }>(`select count(*)::text as count from users`);
   if (Number(count.rows[0]?.count || 0) === 0) {
-    const email = process.env.DEFAULT_ADMIN_EMAIL || "admin@example.com";
-    const password = process.env.DEFAULT_ADMIN_PASSWORD || "password";
-    const passwordHash = await bcrypt.hash(password, 12);
-    await query(
-      `insert into users (name, email, password_hash, role, status)
-       values ($1, $2, $3, 'Admin', 'Active')`,
-      ["Admin User", email.toLowerCase(), passwordHash],
-    );
-    await writeLog("Admin Seeded", `Created initial admin account ${email}`);
+    const email = process.env.DEFAULT_ADMIN_EMAIL?.trim();
+    const password = process.env.DEFAULT_ADMIN_PASSWORD?.trim();
+
+    if (email && password) {
+      const passwordHash = await bcrypt.hash(password, 12);
+      await query(
+        `insert into users (name, email, password_hash, role, status)
+         values ($1, $2, $3, 'Admin', 'Active')`,
+        ["Admin User", email.toLowerCase(), passwordHash],
+      );
+      await writeLog("Admin Seeded", `Created initial admin account ${email}`);
+    } else {
+      console.warn("No users exist and DEFAULT_ADMIN_EMAIL/DEFAULT_ADMIN_PASSWORD are not set. Create the first user manually.");
+    }
   }
 }
