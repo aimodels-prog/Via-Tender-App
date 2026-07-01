@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>My Google AI Studio App</title>
+  </head>
+  <body>
+    <script>
+      window.addEventListener('error', (e) => {
+        if (e.message?.includes('WebSocket') || e.message?.includes('connection')) return;
+        document.body.innerHTML += `<div style="position:fixed;top:0;left:0;background:red;color:white;z-index:9999;padding:20px;font-family:monospace"><b>${e.message}</b><pre>${e.error?.stack}</pre></div>`;
+      });
+      window.addEventListener('unhandledrejection', (e) => {
+        const reason = String(e.reason);
+        if (reason.includes('WebSocket') || reason.includes('closed without opened')) return;
+        document.body.innerHTML += `<div style="position:fixed;top:0;left:0;background:red;color:white;z-index:9999;padding:20px;font-family:monospace"><b>Unhandled Promise: ${e.reason}</b></div>`;
+      });
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+
