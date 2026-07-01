@@ -124,12 +124,12 @@ function AppShell() {
 
 export default function App() {
   return (
-    <TasksProvider>
-      <AuthProvider>
+    <AuthProvider>
+      <TasksProvider>
         <Router>
           <AppShell />
         </Router>
-      </AuthProvider>
-    </TasksProvider>
+      </TasksProvider>
+    </AuthProvider>
   );
 }

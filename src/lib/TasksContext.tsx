@@ -7,6 +7,7 @@ import React, {
   ReactNode,
 } from "react";
 import { api } from "./api";
+import { useAuth } from "./auth";
 
 export type TaskType = "UPLOAD" | "MATCH" | "GENERATE";
 
@@ -34,10 +35,16 @@ interface TasksContextType {
 const TasksContext = createContext<TasksContextType | undefined>(undefined);
 
 export function TasksProvider({ children }: { children: ReactNode }) {
+  const { isAuthenticated, isLoading } = useAuth();
   const [tasks, setTasks] = useState<AppTask[]>([]);
   const [pendingTender, setPendingTenderState] = useState<any | null>(null);
 
   const loadPendingTender = useCallback(async () => {
+    if (!isAuthenticated) {
+      setPendingTenderState(null);
+      return;
+    }
+
     try {
       setPendingTenderState(await api.getUserState("pendingTender", null));
     } catch (error: any) {
@@ -45,13 +52,12 @@ export function TasksProvider({ children }: { children: ReactNode }) {
         console.warn("Pending tender draft could not be loaded:", error);
       }
     }
-  }, []);
+  }, [isAuthenticated]);
 
   useEffect(() => {
+    if (isLoading) return;
     loadPendingTender();
-    window.addEventListener("authChanged", loadPendingTender);
-    return () => window.removeEventListener("authChanged", loadPendingTender);
-  }, [loadPendingTender]);
+  }, [isLoading, loadPendingTender]);
 
   const setPendingTender = useCallback(async (tender: any | null) => {
     setPendingTenderState(tender);
