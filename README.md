@@ -15,6 +15,7 @@ PostgreSQL-backed tender CV extraction, review, matching, and CV generation work
    ```env
    DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE?sslmode=require
    JWT_SECRET=change-this-to-a-long-random-secret
+   ALLOWED_EMAIL_DOMAIN=via-int.com
    DEFAULT_ADMIN_EMAIL=
    DEFAULT_ADMIN_PASSWORD=
    GEMINI_API_KEY=your-gemini-key

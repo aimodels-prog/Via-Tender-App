@@ -6,6 +6,12 @@ import { ALL_PRIMARY_POSITIONS } from "../lib/constants.ts";
 const { Pool } = pg;
 
 const connectionString = process.env.DATABASE_URL;
+const ALLOWED_EMAIL_DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || "via-int.com").trim().toLowerCase();
+
+function isAllowedEmail(value: string) {
+  const email = String(value || "").trim().toLowerCase();
+  return Boolean(email && email.endsWith(`@${ALLOWED_EMAIL_DOMAIN}`));
+}
 
 function buildPoolConfig(): pg.PoolConfig {
   if (!connectionString) {
@@ -233,7 +239,7 @@ export async function initPostgres() {
     const email = process.env.DEFAULT_ADMIN_EMAIL?.trim();
     const password = process.env.DEFAULT_ADMIN_PASSWORD?.trim();
 
-    if (email && password) {
+    if (email && password && isAllowedEmail(email)) {
       const passwordHash = await bcrypt.hash(password, 12);
       await query(
         `insert into users (name, email, password_hash, role, status)
@@ -241,6 +247,8 @@ export async function initPostgres() {
         ["Admin User", email.toLowerCase(), passwordHash],
       );
       await writeLog("Admin Seeded", `Created initial admin account ${email}`);
+    } else if (email && password) {
+      console.warn(`Default admin was not seeded because only ${ALLOWED_EMAIL_DOMAIN} email addresses are allowed.`);
     } else {
       console.warn("No users exist and DEFAULT_ADMIN_EMAIL/DEFAULT_ADMIN_PASSWORD are not set. Create the first user manually.");
     }

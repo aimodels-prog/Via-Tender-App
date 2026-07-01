@@ -32,6 +32,16 @@ declare global {
 
 const JWT_COOKIE = "via_session";
 const JWT_SECRET = process.env.JWT_SECRET || "dev-only-change-before-production";
+const ALLOWED_EMAIL_DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || "via-int.com").trim().toLowerCase();
+
+function isAllowedEmail(value: string) {
+  const email = String(value || "").trim().toLowerCase();
+  return Boolean(email && email.endsWith(`@${ALLOWED_EMAIL_DOMAIN}`));
+}
+
+function domainError() {
+  return `Only ${ALLOWED_EMAIL_DOMAIN} email addresses are allowed.`;
+}
 
 function publicUser(row: any) {
   return {
@@ -201,6 +211,7 @@ async function startServer() {
 
       if (!name) return res.status(400).json({ error: "Full name is required." });
       if (!email) return res.status(400).json({ error: "Email address is required." });
+      if (!isAllowedEmail(email)) return res.status(400).json({ error: domainError() });
       if (password.length < 6) {
         return res.status(400).json({ error: "Password must be at least 6 characters." });
       }
@@ -230,6 +241,7 @@ async function startServer() {
     try {
       const email = String(req.body.email || "").trim().toLowerCase();
       const password = String(req.body.password || "");
+      if (!isAllowedEmail(email)) return res.status(401).json({ error: domainError() });
       const result = await query(`select * from users where lower(email) = lower($1)`, [email]);
       const userRow = result.rows[0];
       if (!userRow) return res.status(401).json({ error: "No user exists with this email address." });
@@ -299,6 +311,7 @@ async function startServer() {
     const role = req.body.role === "Admin" ? "Admin" : "User";
     const status = req.body.status === "Inactive" ? "Inactive" : "Active";
     if (!name || !email) return res.status(400).json({ error: "Name and email are required." });
+    if (!isAllowedEmail(email)) return res.status(400).json({ error: domainError() });
     const existing = await query(`select id from users where lower(email) = lower($1)`, [email]);
     if (existing.rowCount) return res.status(409).json({ error: "A user with this email already exists." });
     const passwordHash = await bcrypt.hash(password, 12);
@@ -321,6 +334,7 @@ async function startServer() {
     const existing = current.rows[0];
     const nextName = String(req.body.name ?? existing.name).trim();
     const nextEmail = String(req.body.email ?? existing.email).trim().toLowerCase();
+    if (!isAllowedEmail(nextEmail)) return res.status(400).json({ error: domainError() });
     const nextRole = req.user?.role === "Admin" && req.body.role === "Admin" ? "Admin" : req.user?.role === "Admin" ? req.body.role || existing.role : existing.role;
     const nextStatus = req.user?.role === "Admin" ? (req.body.status === "Inactive" ? "Inactive" : req.body.status === "Active" ? "Active" : existing.status) : existing.status;
     const passwordHash = req.body.password ? await bcrypt.hash(String(req.body.password), 12) : existing.password_hash;
@@ -438,6 +452,10 @@ async function startServer() {
         email = userInfo.data.email || "";
       } catch {
         email = "";
+      }
+
+      if (!isAllowedEmail(email)) {
+        return res.status(403).send(domainError());
       }
 
       const existingTokens = await getSetting("googleDriveOAuth", {});
