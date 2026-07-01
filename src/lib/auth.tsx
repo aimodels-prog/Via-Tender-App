@@ -94,9 +94,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = () => {
-    fetch("/api/auth/logout", { method: "POST", credentials: "include" }).catch(() => {});
     setCurrentUser(null);
-    window.location.href = "/";
+    fetch("/api/auth/logout", { method: "POST", credentials: "include" })
+      .catch(() => {})
+      .finally(() => {
+        window.location.replace("/");
+      });
   };
 
   const value = useMemo<AuthContextValue>(
