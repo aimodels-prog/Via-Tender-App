@@ -7,23 +7,41 @@ const { Pool } = pg;
 
 const connectionString = process.env.DATABASE_URL;
 
-export const pool = new Pool(
-  connectionString
-    ? {
-        connectionString,
-        ssl:
-          process.env.PGSSL === "false"
-            ? false
-            : { rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED === "true" },
-      }
-    : {
-        host: process.env.PGHOST || "localhost",
-        port: Number(process.env.PGPORT || 5432),
-        database: process.env.PGDATABASE || "via_cv_generation",
-        user: process.env.PGUSER || "postgres",
-        password: process.env.PGPASSWORD || "postgres",
-      },
-);
+function buildPoolConfig(): pg.PoolConfig {
+  if (!connectionString) {
+    return {
+      host: process.env.PGHOST || "localhost",
+      port: Number(process.env.PGPORT || 5432),
+      database: process.env.PGDATABASE || "via_cv_generation",
+      user: process.env.PGUSER || "postgres",
+      password: process.env.PGPASSWORD || "postgres",
+    };
+  }
+
+  if (process.env.PGSSL === "false") {
+    return { connectionString, ssl: false };
+  }
+
+  const rejectUnauthorized = process.env.PGSSL_REJECT_UNAUTHORIZED === "true";
+  let normalizedConnectionString = connectionString;
+
+  if (!rejectUnauthorized) {
+    try {
+      const url = new URL(connectionString);
+      url.searchParams.set("sslmode", "no-verify");
+      normalizedConnectionString = url.toString();
+    } catch {
+      normalizedConnectionString = connectionString;
+    }
+  }
+
+  return {
+    connectionString: normalizedConnectionString,
+    ssl: { rejectUnauthorized },
+  };
+}
+
+export const pool = new Pool(buildPoolConfig());
 
 export async function query<T = any>(text: string, params: any[] = []) {
   return pool.query<T>(text, params);
