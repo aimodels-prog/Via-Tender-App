@@ -17,6 +17,53 @@ function pointCount(value: any) {
   return text.split(/[.;]\s+/).map((part) => part.trim()).filter((part) => wordCount(part) >= 5).length;
 }
 
+function hasMeaningfulEducation(value: any) {
+  const items = Array.isArray(value) ? value : value ? [value] : [];
+  return items.some((item) => {
+    const text = clean(typeof item === "string" ? item : [item.degree, item.field, item.institution, item.location, item.year].filter(Boolean).join(" "));
+    return wordCount(text) >= 3 && /civil|engineer|engineering|survey|quantity|construction|architecture|bachelor|master|diploma|associate|ph\.?d|dae/i.test(text);
+  });
+}
+
+function normalizeSourceText(value: string) {
+  return String(value || "")
+    .replace(/\r/g, "\n")
+    .replace(/\u00A0/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .replace(/\b--\s*\d+\s+of\s+\d+\s*--\b/gi, "\n")
+    .replace(/\bPage\s+\d+\s+of\s+\d+\b/gi, "\n")
+    .trim();
+}
+
+function uniqueCleanLines(lines: string[]) {
+  const seen = new Set<string>();
+  return lines
+    .map((line) => clean(line).replace(/^[-\u2022â€¢]\s*/, "").replace(/[.;]\s*$/, ""))
+    .filter(Boolean)
+    .filter((line) => {
+      const key = line.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function unwrapNarrativeLines(value: string) {
+  const lines = normalizeSourceText(value).split(/\n+/).map(clean).filter(Boolean);
+  const joined: string[] = [];
+  lines.forEach((line) => {
+    const startsNewPoint = /^[-\u2022â€¢]/.test(line) ||
+      /^(Name|Date of Birth|Nationality|Proposed Position|Language Known|Qualification|E-Mail|Mobile|Professional Experience|From\b|[A-Z][a-z]{2,8}\.?\s+\d{4}\b|Client|Project Name|Nature of Work|Cost of|Design Consultant|Consultant|Contractor|Responsibility|Work Supervised|Declaration|Place & Date)\b/i.test(line);
+    if (!joined.length || startsNewPoint) {
+      joined.push(line);
+      return;
+    }
+    joined[joined.length - 1] = `${joined[joined.length - 1]} ${line}`;
+  });
+  return joined.join("\n");
+}
+
 function normalizedIncludes(haystack: string, needle: string) {
   const value = clean(needle).toLowerCase();
   return value.length >= 4 && haystack.toLowerCase().includes(value);
@@ -53,13 +100,13 @@ function getRelevantSourceWindow(rawText: string, item: any) {
 }
 
 function splitActivityPoints(value: string) {
-  return clean(value)
+  return unwrapNarrativeLines(value)
     .replace(/\s*[•▪◦]\s*/g, "\n")
     .replace(/\s+-\s+/g, "\n")
-    .split(/\n+|;\s+|(?<=[.])\s+(?=(?:Prepared|Reviewed|Designed|Supervised|Managed|Coordinated|Checked|Monitored|Inspected|Handled|Assisted|Conducted|Developed|Evaluated|Prepared|Ensured|Provided|Responsible|Duties|Responsibilities)\b)/i)
+    .split(/\n+|;\s+|(?<=[.])\s+(?=(?:Prepared|Reviewed|Designed|Supervised|Managed|Coordinated|Checked|Monitored|Inspected|Handled|Assisted|Conducted|Developed|Evaluated|Ensured|Provided|Responsible|Responsibility|Duties|Responsibilities|The work involved|In addition|Asphalt|Concrete|Soil)\b)/i)
     .map((line) => clean(line).replace(/^[-•]\s*/, ""))
     .filter((line) => wordCount(line) >= 5)
-    .filter((line) => /responsib|duties|prepared|preparation|designed|reviewed|supervised|supervision|managed|coordinated|checked|checking|analysis|inspection|progress|quality|safety|construction|claims|variation|monitor|estimate|report|site|contract|quantity|survey|boq|invoice|measurement/i.test(line));
+    .filter((line) => /responsib|duties|prepared|preparation|designed|reviewed|supervised|supervision|managed|coordinated|checked|checking|analysis|inspection|progress|quality|safety|construction|claims|variation|monitor|estimate|report|site|contract|quantity|survey|boq|invoice|measurement|laboratory|asphalt|concrete|soil|subgrade|subbase|embankment|calibration|compaction|gradation|testing|test|rfi|ncr|hse|marshal|marshall|field density|aashto|astm/i.test(line));
 }
 
 function mergeActivityDetails(currentDescription: string, sourceWindow: string) {
@@ -135,8 +182,26 @@ export function recoverEmploymentActivitiesFromText(expert: any, rawText: string
   };
 }
 
+function parseEducationItem(text: string) {
+  const value = clean(text)
+    .replace(/^(qualification|qualifications|education|academic qualifications|academic)\s*:?\s*/i, "")
+    .replace(/[â€¢ïƒ˜]/g, "")
+    .trim();
+  if (!value) return null;
+
+  const parentheticalField = value.match(/\(([^)]+)\)\s*$/);
+  const field = parentheticalField?.[1] || (value.match(/\b(Civil|Structural|Mechanical|Electrical|Quantity Surveying|Construction Management|Architecture|Surveying)\b(?:\s+Engineering)?/i)?.[0] || "");
+  const degree = parentheticalField ? value.replace(/\s*\([^)]+\)\s*$/, "") : value;
+
+  return {
+    degree,
+    field,
+    notes: value,
+  };
+}
+
 export function recoverEducationFromText(text: string) {
-  const normalized = clean(text);
+  const normalized = normalizeSourceText(text);
   const start = normalized.search(/\b(qualification|qualifications|education|academic qualifications|academic)\b/i);
   if (start < 0) return [];
 
@@ -147,23 +212,205 @@ export function recoverEducationFromText(text: string) {
     .slice(start, endMatch > 0 ? start + endMatch : start + 900)
     .replace(/[•]/g, " ");
   const patterns = [
-    /\b(?:Ph\.?D\.?|Doctor(?:ate)?|DAE|Diploma|Bachelor|Bachelors|Bachelor's|BSc|B\.?Sc\.?|Master|Masters|MSc|M\.?Sc\.?|MEng|M\.?Eng|Degree|Intermediate|Matriculation)\s+(?:in\s+)?[A-Za-z&/.,() -]{3,160}(?=\s+(?:Ph\.?D|Doctor|DAE|Diploma|Bachelor|BSc|B\.?Sc|Master|MSc|MEng|M\.?Eng|Intermediate|Matriculation|Memberships|Skills|Personal Profile|References)|$)/gi,
+    /\bQualification\s*:?\s*([^\n.;]{3,180})/gi,
+    /\b(?:Ph\.?D\.?|Doctor(?:ate)?|DAE|Diploma|Bachelor|Bachelors|Bachelor's|BSc|B\.?Sc\.?|Master|Masters|MSc|M\.?Sc\.?|MEng|M\.?Eng|Degree|Intermediate|Matriculation)\s+(?:of\s+|in\s+)?[A-Za-z&/.,() -]{3,160}(?=\s+(?:Ph\.?D|Doctor|DAE|Diploma|Bachelor|BSc|B\.?Sc|Master|MSc|MEng|M\.?Eng|Intermediate|Matriculation|Memberships|Skills|Personal Profile|References)|$)/gi,
     /\b(?:Civil Engineering|Structural Engineering|Civil Engineer|Quantity Surveying|Pre-Engineering|Matriculation Science|Architecture|Surveying|Construction Management)\b(?:\s*\([^)]+\))?/gi,
   ];
 
   const found = patterns
-    .flatMap((pattern) => section.match(pattern) || [])
+    .flatMap((pattern) => Array.from(section.matchAll(pattern)).map((match) => match[1] || match[0]))
     .map((item) => item.replace(/^(qualification|education)\s*:?/i, "").trim())
     .map((item) => item.replace(/[•]/g, "").replace(/\s+/g, " ").trim())
     .filter((item) => wordCount(item) >= 2);
 
-  return Array.from(new Set(found));
+  return Array.from(new Set(found)).map(parseEducationItem).filter(Boolean);
+}
+
+function periodSignature(value: string) {
+  return clean(value)
+    .toLowerCase()
+    .replace(/\b(sept|sep)\.?\b/g, "sep")
+    .replace(/\bdec\.\b/g, "dec")
+    .replace(/\boct\.\b/g, "oct")
+    .replace(/\s+/g, " ");
+}
+
+function extractFirst(pattern: RegExp, text: string) {
+  return clean(text.match(pattern)?.[1] || "");
+}
+
+function inferCountryFromBlock(block: string) {
+  const countries = ["Oman", "Pakistan", "Saudi Arabia", "UAE", "United Arab Emirates", "Qatar", "Bahrain", "Kuwait", "India"];
+  return countries
+    .map((country) => ({
+      country,
+      index: block.search(new RegExp(`\\b${country.replace(/\s+/g, "\\s+")}\\b`, "i")),
+    }))
+    .filter((item) => item.index >= 0)
+    .sort((a, b) => a.index - b.index)[0]?.country || "";
+}
+
+function inferRoleAndOrganization(block: string) {
+  const text = unwrapNarrativeLines(block);
+  const stop = "(?:\\s+for\\b|\\s+For\\b|\\n|\\s+Project\\s+Name\\b|\\s+Client\\b|\\s+Nature\\s+of\\s+Work\\b)";
+  const patterns = [
+    new RegExp(`\\bWorking\\s+with\\s+(.+?)\\s+as\\s+(?:a\\s+|an\\s+)?(.+?)${stop}`, "i"),
+    new RegExp(`\\bWorking\\s+as\\s+(?:a\\s+|an\\s+)?(.+?)\\s+with\\s+(.+?)${stop}`, "i"),
+    new RegExp(`\\bWorked\\s+with\\s+(.+?)\\s+as\\s+(?:a\\s+|an\\s+)?(.+?)${stop}`, "i"),
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) continue;
+    const first = clean(match[1]).replace(/[.,]\s*$/, "");
+    const second = clean(match[2]).replace(/[.,]\s*$/, "");
+    if (/working\s+as/i.test(match[0])) {
+      return { role: first, organization: second };
+    }
+    return { organization: first, role: second };
+  }
+
+  return {
+    organization: extractFirst(/\bwith\s+(.+?)(?:\n|Project\s+Name|Client|Nature\s+of\s+Work)/i, text),
+    role: extractFirst(/\bas\s+(?:a\s+|an\s+)?(.+?)(?:\n|Project\s+Name|Client|Nature\s+of\s+Work)/i, text),
+  };
+}
+
+function extractProjectName(block: string) {
+  const text = unwrapNarrativeLines(block);
+  return (
+    extractFirst(/\bNature\s+of\s+Work\s*:?\s*(.+?)(?:\n|Client\s*:)/i, text) ||
+    extractFirst(/\bProject\s+Name\s*:?\s*(.+?)(?:\n|Length\s*:|Cost\s+of\s+Project\s*:|Client\s*:)/i, text)
+  );
+}
+
+function extractClient(block: string) {
+  return extractFirst(/\bClient\s*:?\s*(.+?)(?:\n|Cost\s+of\s+Project\s*:|Project\s+Name\s*:|Consultant\s*:)/i, unwrapNarrativeLines(block));
+}
+
+function extractDescriptionFromBlock(block: string) {
+  const points = uniqueCleanLines(splitActivityPoints(block));
+  if (points.length) return points.map((line) => `- ${line}`).join("\n");
+
+  const fallback = uniqueCleanLines(
+    unwrapNarrativeLines(block)
+      .split(/(?<=[.])\s+|\n+/)
+      .filter((line) => /work involved|project consists|checking|testing|quality|laboratory|asphalt|concrete|soil|supervision|inspection|maintaining/i.test(line)),
+  );
+  return fallback.map((line) => `- ${line}`).join("\n");
+}
+
+function extractEmploymentBlocksFromText(rawText: string) {
+  const text = normalizeSourceText(rawText);
+  const month = "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t)?|Sept(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\.?"
+  const periodPattern = new RegExp(`(?:^|\\n)\\s*(?:From\\s+)?((?:${month})\\s*\\d{4})\\s*(?:to|-|–|—)\\s*((?:till\\s+date|present|date)|(?:${month})\\s*\\d{4})\\s*:?`, "gi");
+  const matches = Array.from(text.matchAll(periodPattern));
+
+  return matches.map((match, index) => {
+    const start = match.index || 0;
+    const end = matches[index + 1]?.index || text.length;
+    const block = text.slice(start, end).trim();
+    const period = `${clean(match[1])} to ${clean(match[2])}`;
+    const { role, organization } = inferRoleAndOrganization(block);
+    const projectName = extractProjectName(block);
+    const client = extractClient(block);
+    const description = extractDescriptionFromBlock(block);
+
+    return {
+      duration: period,
+      start_date: clean(match[1]),
+      end_date: clean(match[2]),
+      organization,
+      client,
+      role,
+      country: inferCountryFromBlock(block),
+      project_name: projectName,
+      description,
+      _sourceRecovered: true,
+    };
+  }).filter((item) => item.duration && (item.organization || item.role || item.project_name || item.description));
+}
+
+export function recoverEmploymentRecordsFromText(expert: any, rawText: string) {
+  const recovered = extractEmploymentBlocksFromText(rawText);
+  if (!recovered.length) return expert;
+
+  const existing = expert.experiences || expert.employment_history || [];
+  const next = [...existing];
+  const addedPeriods: string[] = [];
+  const enrichedPeriods: string[] = [];
+
+  recovered.forEach((item) => {
+    const signature = periodSignature(item.duration);
+    const existingIndex = next.findIndex((current: any) => {
+      const currentPeriod = periodSignature(current.duration || current.period || `${current.start_date || ""} to ${current.end_date || ""}`);
+      const years = Array.from(new Set(item.duration.match(/\b(19|20)\d{2}\b/g) || []));
+      const sameYears = years.length >= 2 && years.every((year) => currentPeriod.includes(year));
+      return currentPeriod === signature || sameYears;
+    });
+
+    if (existingIndex >= 0) {
+      const current = next[existingIndex];
+      const mergedDescription = mergeActivityDetails(current.description || "", item.description || "");
+      next[existingIndex] = {
+        ...item,
+        ...current,
+        duration: current.duration || item.duration,
+        start_date: current.start_date || item.start_date,
+        end_date: current.end_date || item.end_date,
+        organization: current.organization || item.organization,
+        client: current.client || item.client,
+        role: current.role || item.role,
+        country: current.country || item.country,
+        project_name: current.project_name || item.project_name,
+        description: clean(mergedDescription) || current.description || item.description,
+      };
+      if (clean(next[existingIndex].description) !== clean(current.description)) enrichedPeriods.push(item.duration);
+      return;
+    }
+
+    next.push(item);
+    addedPeriods.push(item.duration);
+  });
+
+  if (!addedPeriods.length && !enrichedPeriods.length) return expert;
+
+  return {
+    ...expert,
+    experiences: next,
+    employment_history: next,
+    extraction_recovery: {
+      ...(expert.extraction_recovery || {}),
+      employmentRecordsRecoveredFromRawText: addedPeriods,
+      employmentRecordsEnrichedFromRawText: enrichedPeriods,
+    },
+    metadata: {
+      ...(expert.metadata || {}),
+      extraction_audit_notes: [
+        ...(expert.metadata?.extraction_audit_notes || []),
+        addedPeriods.length ? `Recovered missing employment record(s) from date-led CV text: ${addedPeriods.join(", ")}.` : "",
+        enrichedPeriods.length ? `Recovered narrative duties from source CV for employment period(s): ${enrichedPeriods.join(", ")}.` : "",
+      ].filter(Boolean),
+    },
+  };
 }
 
 export function strengthenAdequacyFromEmployment(expert: any) {
   const experiences = expert.experiences || expert.employment_history || [];
-  const adequacy = expert.adequacy_experience || expert.metadata?.adequacy || [];
-  if (!experiences.length || !adequacy.length) return expert;
+  const existingAdequacy = expert.adequacy_experience || expert.metadata?.adequacy || [];
+  if (!experiences.length) return expert;
+  const adequacy = existingAdequacy.length
+    ? existingAdequacy
+    : experiences
+        .filter((exp: any) => clean(exp.project_name || exp.description).length > 20)
+        .map((exp: any) => ({
+          period: exp.duration || exp.period || "",
+          country: exp.country || "",
+          client: exp.client || exp.organization || "",
+          position: exp.role || "",
+          assignment: [exp.project_name, exp.description].filter(Boolean).join("\n"),
+        }));
+  if (!adequacy.length) return expert;
 
   const strongerAdequacy = adequacy.map((item: any, index: number) => {
     const assignment = clean(item.assignment);
@@ -207,6 +454,10 @@ export function strengthenAdequacyFromEmployment(expert: any) {
     metadata: {
       ...(expert.metadata || {}),
       adequacy: strongerAdequacy,
+      extraction_audit_notes: [
+        ...(expert.metadata?.extraction_audit_notes || []),
+        !existingAdequacy.length ? "Built adequacy/key experience blocks from employment project narratives because the source CV did not provide a separate adequacy table." : "",
+      ].filter(Boolean),
     },
   };
 }
@@ -214,16 +465,16 @@ export function strengthenAdequacyFromEmployment(expert: any) {
 export function postProcessExtractedExpert(expert: any, rawText: string) {
   let next = { ...expert };
   const existingEducation = next.education || next.metadata?.educations || [];
-  if (!existingEducation.length) {
+  if (!hasMeaningfulEducation(existingEducation)) {
     const recoveredEducation = recoverEducationFromText(rawText);
     if (recoveredEducation.length) {
       next = {
         ...next,
         education: recoveredEducation,
-        educationLevel: next.educationLevel || recoveredEducation[0],
+        educationLevel: next.educationLevel || clean([recoveredEducation[0]?.degree, recoveredEducation[0]?.field].filter(Boolean).join(" ")),
         metadata: {
           ...(next.metadata || {}),
-          educations: recoveredEducation.map((item) => ({ degree: item })),
+          educations: recoveredEducation,
         },
         extraction_recovery: {
           ...(next.extraction_recovery || {}),
@@ -233,6 +484,7 @@ export function postProcessExtractedExpert(expert: any, rawText: string) {
     }
   }
 
+  next = recoverEmploymentRecordsFromText(next, rawText);
   next = recoverEmploymentActivitiesFromText(next, rawText);
 
   return strengthenAdequacyFromEmployment(next);
