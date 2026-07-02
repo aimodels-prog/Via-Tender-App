@@ -64,7 +64,6 @@ function formatEducation(value: any) {
     value?.location,
     yearText && !degreeText.toLowerCase().includes(yearText.toLowerCase()) ? yearText : "",
     value?.grade,
-    value?.notes && !clean(value?.degree).includes(clean(value?.notes)) ? value.notes : "",
   ].filter(Boolean).join(", "));
 }
 
@@ -78,23 +77,83 @@ function isFormalEducationDetail(value: any) {
   return /\b(ph\.?d|doctorate|doctoral|masters?|master of|m\.?sc|m\.?eng|meng|bachelors?|bachelor of|b\.?sc|b\.?eng|beng|diploma|dae|degree)\b/.test(text);
 }
 
+function stripEducationDate(value: string) {
+  return clean(value)
+    .replace(/\b\d{1,2}\/(?:19|20)\d{2}\b\s*(?:[-\u2013\u2014]|\?)\s*(?:\b\d{1,2}\/(?:19|20)\d{2}\b|present)\b/gi, "")
+    .replace(/\b\d{1,2}\/\s*(?:[-\u2013\u2014]|\?)\s*\d{1,2}\/\b/g, "")
+    .replace(/\b(?:19|20)\d{2}\b/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/[,\-–—]\s*$/, "")
+    .trim();
+}
+
+function normalizeDateText(value: any) {
+  return clean(value).replace(/(\d{1,2}\/(?:19|20)\d{2})\s*\?\s*(\d{1,2}\/(?:19|20)\d{2}|present)/gi, "$1 - $2");
+}
+
+function educationLevelKey(value: any) {
+  const text = formatEducation(value).toLowerCase();
+  if (/\b(ph\.?d|doctorate|doctoral)\b/.test(text)) return "phd";
+  if (/\b(masters?|master of|m\.?sc|m\.?eng|meng|mba)\b/.test(text)) return "master";
+  if (/\b(bachelors?|bachelor of|b\.?sc|b\.?eng|beng|ba|b\.?a)\b/.test(text)) return "bachelor";
+  if (/\b(diploma|dae)\b/.test(text)) return "diploma";
+  if (/\b(degree)\b/.test(text)) return "degree";
+  return "";
+}
+
+function inferEducationField(value: any) {
+  const explicit = clean(value?.field);
+  if (explicit) return explicit;
+  const text = stripEducationDate(clean(value?.degree || value));
+  const field =
+    text.match(/\b(?:in|of)\s+([^,;]+)$/i)?.[1] ||
+    text.match(/\b(Product Design|Architecture|Civil Engineering|Artificial Intelligence|Engineering|Construction Management|Quantity Surveying)\b/i)?.[1] ||
+    "";
+  return clean(field);
+}
+
+function parseEducationString(value: string) {
+  const text = clean(value);
+  const parts = text.split(/\s*,\s*/).map(clean).filter(Boolean);
+  const first = parts[0] || text;
+  const year = normalizeDateText(text.match(/\b\d{1,2}\/(?:19|20)\d{2}\b\s*(?:[-\u2013\u2014]|\?)\s*(?:\b\d{1,2}\/(?:19|20)\d{2}\b|present)\b|\b(?:19|20)\d{2}\b/i)?.[0] || "");
+  const degree = stripEducationDate(first);
+  const field = inferEducationField({ degree });
+  const institutionParts = parts.slice(1).filter((part) => !part.match(/^\d{1,2}\/(?:19|20)\d{2}|^(?:19|20)\d{2}/));
+  return {
+    degree,
+    field,
+    institution: institutionParts[0] || "",
+    year,
+    location: institutionParts.slice(1).join(", "),
+    grade: "",
+    notes: "",
+  };
+}
+
+function educationMergeKey(value: any) {
+  const level = educationLevelKey(value);
+  const field = inferEducationField(value).toLowerCase();
+  const degree = stripEducationDate(clean(value?.degree || value)).toLowerCase();
+  return clean([level || degree, field || degree.replace(/\b(ph\.?d|doctorate|doctoral|masters?|master'?s?|master of|m\.?sc|m\.?eng|meng|mba|bachelors?|bachelor'?s?|bachelor of|b\.?sc|b\.?eng|beng|ba|b\.?a|diploma|dae|degree)\b/gi, "")].filter(Boolean).join("|"));
+}
+
 function normalizeEducationObjects(value: any) {
   const items = Array.isArray(value) ? value : value ? [value] : [];
   const normalized = items
     .map((item) => {
       if (typeof item !== "string") {
         return {
-          degree: clean(item?.degree || item?.qualification || item?.title),
-          field: clean(item?.field || item?.fieldOfStudy || item?.major),
+          degree: stripEducationDate(clean(item?.degree || item?.qualification || item?.title)),
+          field: clean(item?.field || item?.fieldOfStudy || item?.major) || inferEducationField(item),
           institution: clean(item?.institution || item?.school || item?.university),
-          year: clean(item?.year || item?.date || item?.period),
+          year: normalizeDateText(item?.year || item?.date || item?.period),
           location: clean(item?.location || item?.country),
           grade: clean(item?.grade || item?.gpa),
           notes: clean(item?.notes),
         };
       }
-      const text = clean(item);
-      return { degree: text, field: "", institution: "", year: clean(text.match(/\b(?:19|20)\d{2}\b|\b\d{2}\/(?:19|20)\d{2}\b/)?.[0] || ""), location: "", grade: "", notes: "" };
+      return parseEducationString(item);
     })
     .filter((item) => {
       const text = formatEducation(item);
@@ -104,13 +163,27 @@ function normalizeEducationObjects(value: any) {
       return isFormalEducationDetail(item);
     });
 
-  const seen = new Set<string>();
-  return normalized.filter((item) => {
-    const key = formatEducation(item).toLowerCase();
-    if (!key || seen.has(key)) return false;
-    seen.add(key);
-    return true;
+  const merged = new Map<string, any>();
+  normalized.forEach((item) => {
+    const key = educationMergeKey(item);
+    if (!key) return;
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, item);
+      return;
+    }
+    merged.set(key, {
+      degree: existing.degree || item.degree,
+      field: existing.field || item.field,
+      institution: existing.institution || item.institution,
+      year: existing.year || item.year,
+      location: existing.location || item.location,
+      grade: existing.grade || item.grade,
+      notes: existing.notes || item.notes,
+    });
   });
+
+  return Array.from(merged.values());
 }
 
 function deriveEducationLevel(value: any) {

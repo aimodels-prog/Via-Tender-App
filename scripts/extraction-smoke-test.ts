@@ -1,7 +1,7 @@
 import fs from "fs";
 import mammoth from "mammoth";
 import { extractUniversalCVFacts, extractUniversalTenderFacts } from "../src/lib/universalExtraction.ts";
-import { postProcessExtractedExpert } from "../src/lib/cvPostProcess.ts";
+import { normalizeExpertCollections, postProcessExtractedExpert } from "../src/lib/cvPostProcess.ts";
 
 async function readDocxText(path: string) {
   const result = await mammoth.extractRawText({ buffer: fs.readFileSync(path) });
@@ -29,6 +29,17 @@ async function main() {
     if (expert.metadata?.educations?.length !== 2) throw new Error(`Expected Silvia CV to have exactly 2 formal education details, got ${expert.metadata?.educations?.length}.`);
     if (/training|course|erasmus|qualification to practice/i.test(JSON.stringify(expert.metadata?.educations || []))) {
       throw new Error("Silvia formal education details are contaminated with training/course/exchange/license entries.");
+    }
+    const duplicatedSilviaEducation = normalizeExpertCollections({
+      education: [
+        "Master in Product Design 04/2022 - 06/2023",
+        "Master's Degree in Architecture 09/2012 - 03/2018",
+        "Master in Product Design, QUASAR | Institute for Advanced Design, Rome",
+        "Master's Degree in Architecture, Faculty of Architecture La Sapienza, Rome",
+      ],
+    });
+    if (duplicatedSilviaEducation.metadata?.educations?.length !== 2) {
+      throw new Error(`Expected duplicated Silvia education fragments to merge into 2 records, got ${duplicatedSilviaEducation.metadata?.educations?.length}.`);
     }
     const aiTrainer = expert.experiences?.find((item: any) => item.role === "AI Trainer");
     if (!aiTrainer?.description?.includes("Copilot")) throw new Error("Expected AI Trainer duties to be recovered from Silvia CV.");

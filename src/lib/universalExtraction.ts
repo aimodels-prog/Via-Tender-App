@@ -214,7 +214,8 @@ function parseEducation(sections: TextSection[], allLines: TextLine[]) {
   const eduPattern = /\b(Ph\.?D\.?|Doctor(?:ate)?|DAE|Diploma|Bachelor'?s?|B\.?Sc\.?|Master'?s?|M\.?Sc\.?|M\.?Eng|MEng|Degree)\b(?:\s+(?:of|in)\s+|\s+)?([^,\n;]{0,120})?/i;
   const stopPattern = /\b(work experience|professional experience|employment|languages?|skills?|software|signature|certifications?|publications?)\b/i;
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
     if (stopPattern.test(line.text) && !eduPattern.test(line.text)) continue;
     const text = line.text.replace(/^(qualification|education|education & training)\s*:?\s*/i, "");
     const match = text.match(eduPattern);
@@ -225,12 +226,21 @@ function parseEducation(sections: TextSection[], allLines: TextLine[]) {
     const degreeText = clean(match[1]);
     const rest = clean(match[2] || "");
     const inferredField = parentheticalField || rest.match(/\b(Civil Engineering|Civil|Architecture|Product Design|Artificial Intelligence|Engineering|Construction Management|Quantity Surveying)\b/i)?.[0] || "";
-    const institution = clean(full.match(/\b(?:at|from)\s+([^,;]+?)(?:,|\b(?:19|20)\d{2}\b|$)/i)?.[1] || "");
+    const nextLine = clean(lines[index + 1]?.text || "");
+    const nextLooksLikeInstitution =
+      nextLine &&
+      !eduPattern.test(nextLine) &&
+      !stopPattern.test(nextLine) &&
+      /\b(university|college|faculty|institute|school|academy|politecnico|quasar|sapienza)\b/i.test(nextLine);
+    const institutionLine = nextLooksLikeInstitution ? nextLine.replace(/\s+[-\u2013\u2014]\s+.+$/, "") : "";
+    const locationLine = nextLooksLikeInstitution ? clean(nextLine.match(/\s+[-\u2013\u2014]\s+(.+)$/)?.[1] || "") : "";
+    const institution = clean(full.match(/\b(?:at|from)\s+([^,;]+?)(?:,|\b(?:19|20)\d{2}\b|$)/i)?.[1] || institutionLine);
     const year = clean(full.match(/\b(?:19|20)\d{2}\b|\b\d{2}\/(?:19|20)\d{2}\b(?:\s*[-\u2013\u2014]\s*(?:\d{2}\/(?:19|20)\d{2}|Present))?/i)?.[0] || "");
     education.push({
       degree: full.length <= 160 ? full : degreeText,
       field: inferredField,
       institution,
+      location: locationLine,
       year,
       notes: full,
     });
