@@ -99,6 +99,28 @@ function normalizeEducationObjects(value: any) {
   });
 }
 
+function deriveEducationLevel(value: any) {
+  const text = [
+    ...(Array.isArray(value) ? value : value ? [value] : []),
+  ].map(formatEducation).join(" ").toLowerCase();
+  if (!text) return "";
+  if (/\b(ph\.?d|doctorate|doctoral)\b/.test(text)) return "PhD";
+  if (/\b(masters?|master of|m\.?sc|m\.?eng|meng|mba)\b/.test(text)) return "Master Degree";
+  if (/\b(bachelors?|bachelor of|b\.?sc|b\.?eng|beng|ba|b\.?a)\b/.test(text)) return "Bachelor Degree";
+  if (/\b(degree)\b/.test(text)) return "Degree";
+  if (/\b(diploma|dae)\b/.test(text)) return "Diploma";
+  if (/\b(certificate|certification)\b/.test(text)) return "Certificate";
+  return "";
+}
+
+function normalizeEducationLevel(value: any, educationObjects: any[]) {
+  const derived = deriveEducationLevel(educationObjects);
+  if (derived) return derived;
+  const text = clean(value);
+  if (!text) return "";
+  return deriveEducationLevel([text]) || text;
+}
+
 export function normalizeExpertCollections(expert: any) {
   const languageObjects = normalizeLanguageObjects([
     ...(Array.isArray(expert?.metadata?.languages) ? expert.metadata.languages : []),
@@ -113,7 +135,7 @@ export function normalizeExpertCollections(expert: any) {
     ...expert,
     languages: languageObjects.map(formatLanguage).filter(Boolean),
     education: educationObjects.map(formatEducation).filter(Boolean),
-    educationLevel: expert?.educationLevel || formatEducation(educationObjects[0]),
+    educationLevel: normalizeEducationLevel(expert?.educationLevel, educationObjects),
     metadata: {
       ...(expert?.metadata || {}),
       languages: languageObjects,

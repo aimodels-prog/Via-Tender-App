@@ -280,8 +280,8 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
               </div>
             </Accordion>
 
-            {/* Education & Experience */}
-            <Accordion title="Education & Experience" icon={<span className="text-xl">🎓</span>}>
+            {/* Education Level & Experience */}
+            <Accordion title="Education Level & Experience" icon={<span className="text-xl">🎓</span>}>
               <div className="grid grid-cols-3 gap-6">
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Education Level</label>
