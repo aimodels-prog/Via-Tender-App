@@ -395,6 +395,82 @@ export function recoverEmploymentRecordsFromText(expert: any, rawText: string) {
   };
 }
 
+function normalizeLanguageName(value: string) {
+  return clean(value).replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, "");
+}
+
+export function recoverLanguagesFromText(expert: any, rawText: string) {
+  const existing = [
+    ...(Array.isArray(expert.languages) ? expert.languages : []),
+    ...(Array.isArray(expert.metadata?.languages) ? expert.metadata.languages : []),
+  ];
+  const normalizedExisting = existing
+    .map((item: any) => {
+      if (typeof item === "string") {
+        const [name, level] = item.split(/\s+[-–—]\s+/);
+        return { name: normalizeLanguageName(name), level: clean(level || "") };
+      }
+      return {
+        name: normalizeLanguageName(item.name || item.language || item.title || ""),
+        level: clean(item.level || item.proficiency || item.notes || ""),
+      };
+    })
+    .filter((item) => item.name);
+
+  const text = normalizeSourceText(rawText);
+  const start = text.search(/\b(languages?|language known|language proficiency)\b/i);
+  let recovered: Array<{ name: string; level: string }> = [];
+
+  if (start >= 0) {
+    const sectionEnd = text
+      .slice(start + 1)
+      .search(/\b(soft skills?|skills?|software|work experience|professional experience|education|training|employment|profile|contacts?)\b/i);
+    const section = text.slice(start, sectionEnd > 0 ? start + 1 + sectionEnd : start + 700);
+    recovered = section
+      .split(/\n+|,\s*|;\s*/)
+      .map((line) => clean(line).replace(/^(languages?|language known|language proficiency)\s*:?\s*/i, ""))
+      .filter(Boolean)
+      .flatMap((line) => {
+        const inline = Array.from(line.matchAll(/\b(English|French|Portuguese|Italian|Spanish|Arabic|Urdu|Hindi|Punjabi|Panjabi|German|Russian|Chinese|Mandarin|Turkish)\b(?:\s*[-–—:]\s*(Native|Fluent|Excellent|Good|Basic|Intermediate|Advanced|Professional|Working))?/gi));
+        if (inline.length) {
+          return inline.map((match) => ({ name: normalizeLanguageName(match[1]), level: clean(match[2] || "") }));
+        }
+        const [name, level] = line.split(/\s+[-–—:]\s+/);
+        const languageName = normalizeLanguageName(name);
+        return /^(English|French|Portuguese|Italian|Spanish|Arabic|Urdu|Hindi|Punjabi|Panjabi|German|Russian|Chinese|Mandarin|Turkish)$/i.test(languageName)
+          ? [{ name: languageName, level: clean(level || "") }]
+          : [];
+      });
+  }
+
+  const byName = new Map<string, { name: string; level: string }>();
+  [...normalizedExisting, ...recovered].forEach((item) => {
+    const key = item.name.toLowerCase();
+    const current = byName.get(key);
+    if (!current || (!current.level && item.level)) byName.set(key, item);
+  });
+
+  const languages = Array.from(byName.values());
+  if (!languages.length) return expert;
+
+  return {
+    ...expert,
+    languages: languages.map((item) => item.level ? `${item.name} - ${item.level}` : item.name),
+    metadata: {
+      ...(expert.metadata || {}),
+      languages,
+      extraction_audit_notes: [
+        ...(expert.metadata?.extraction_audit_notes || []),
+        recovered.length ? `Recovered language(s) from source CV: ${recovered.map((item) => item.level ? `${item.name} - ${item.level}` : item.name).join(", ")}.` : "",
+      ].filter(Boolean),
+    },
+    extraction_recovery: {
+      ...(expert.extraction_recovery || {}),
+      languagesRecoveredFromRawText: recovered,
+    },
+  };
+}
+
 export function strengthenAdequacyFromEmployment(expert: any) {
   const experiences = expert.experiences || expert.employment_history || [];
   const existingAdequacy = expert.adequacy_experience || expert.metadata?.adequacy || [];
@@ -486,6 +562,7 @@ export function postProcessExtractedExpert(expert: any, rawText: string) {
 
   next = recoverEmploymentRecordsFromText(next, rawText);
   next = recoverEmploymentActivitiesFromText(next, rawText);
+  next = recoverLanguagesFromText(next, rawText);
 
   return strengthenAdequacyFromEmployment(next);
 }

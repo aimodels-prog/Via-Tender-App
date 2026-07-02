@@ -310,6 +310,16 @@ export async function runParseCVText(text: string, tax: string[]): Promise<any[]
       const str = String(value || "").trim();
       return str && !str.toLowerCase().includes("not stated") ? str : "";
     };
+    const normalizeRole = (value: any, fallbackText: any = "") => {
+      const text = `${cleanOptional(value)} ${cleanOptional(fallbackText)}`.toLowerCase();
+      const exact = taxonomy.find((item) => item.toLowerCase() === cleanOptional(value).toLowerCase());
+      if (exact) return exact;
+      const fuzzy = taxonomy.find((item) => {
+        const lower = item.toLowerCase();
+        return text.includes(lower) || lower.split(/[^a-z0-9]+/).filter((part) => part.length > 2).every((part) => text.includes(part));
+      });
+      return fuzzy || "Others";
+    };
 
     const education =
       e.metadata?.educations?.map((ed: any) => {
@@ -331,6 +341,14 @@ export async function runParseCVText(text: string, tax: string[]): Promise<any[]
     const dateOfBirth = e.dateOfBirth || e.birth_date || e.date_of_birth || "";
     const citizenship =
       e.countryOfCitizenship || e.nationality || e.citizenship || "";
+    const firstExperienceRole = cleanOptional(e.experiences?.[0]?.role || e.employment_history?.[0]?.role);
+    const rawPrimaryPosition = cleanOptional(e.primary_position);
+    const primaryPosition =
+      !rawPrimaryPosition ||
+      rawPrimaryPosition.length > 80 ||
+      rawPrimaryPosition.includes("|")
+        ? firstExperienceRole || rawPrimaryPosition || cleanOptional(e.role) || "Unknown"
+        : rawPrimaryPosition;
     const formatAdequacyAssignment = (value: any) => {
       const marker = "<<<POINT>>>";
       const text = String(value || "")
@@ -379,8 +397,8 @@ export async function runParseCVText(text: string, tax: string[]): Promise<any[]
       name: e.fullName || e.name || "",
       email: e.email || "",
       phone: e.phone || "",
-      primary_position: e.primary_position || e.role || "Unknown",
-      role: e.role || taxonomy[0],
+      primary_position: primaryPosition,
+      role: normalizeRole(e.role, `${primaryPosition} ${e.profileSummary || ""} ${(e.skills || []).join(" ")}`),
       dateOfBirth,
       birth_date: dateOfBirth,
       countryOfCitizenship: citizenship,
@@ -398,7 +416,7 @@ export async function runParseCVText(text: string, tax: string[]): Promise<any[]
             cleanOptional(l.name) +
             (cleanOptional(l.level) ? ` - ${cleanOptional(l.level)}` : ""),
         ) ||
-        e.languages?.map((l: any) => (typeof l === "string" ? l : l.language)) ||
+        e.languages?.map((l: any) => (typeof l === "string" ? l : l.name || l.language)) ||
         e.languages ||
         [],
       highlights: e.highlights_of_activities || [],
@@ -501,6 +519,119 @@ ${JSON.stringify(expertData)}
     return expertData;
   }
 }
+function cleanTenderLine(value: any) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizePositionTitle(value: string) {
+  return cleanTenderLine(value)
+    .replace(/^[\d.)\-\s]+/, "")
+    .replace(/\b(no\.?|number|qty|quantity|personnel|staff|expert|key expert|position|role)\b\s*:?\s*/gi, "")
+    .replace(/\s*\(\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*\)\s*$/i, "")
+    .replace(/\s*[-–—:]\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*$/i, "")
+    .replace(/[.;:,]\s*$/, "")
+    .trim();
+}
+
+function isLikelyStaffRoleTitle(value: string) {
+  const title = normalizePositionTitle(value);
+  if (!title || title.length < 4 || title.length > 90) return false;
+  if (/^(scope|background|objective|deliverables|submission|evaluation|financial|technical|appendix|annex|table|minimum|general|specific|description)$/i.test(title)) return false;
+  return /\b(manager|engineer|expert|specialist|consultant|leader|director|coordinator|surveyor|inspector|architect|designer|planner|scheduler|advisor|trainer|analyst|officer|supervisor|controller|technician|draftsman|economist|sociologist|environmentalist|hydrologist|geologist|qa\/qc|hse|team leader|project manager|resident engineer)\b/i.test(title);
+}
+
+function extractQuantityFromPositionLine(line: string) {
+  const match =
+    line.match(/\b(?:qty|quantity|no\.?|number)\s*[:\-]?\s*(\d{1,2})\b/i) ||
+    line.match(/\((\d{1,2})\s*(?:nos?\.?|persons?|staff)?\)/i) ||
+    line.match(/\b(\d{1,2})\s*(?:nos?\.?|persons?|staff)\b/i) ||
+    line.match(/^\s*(\d{1,2})\s+[-.)]?\s+[A-Za-z]/);
+  return match ? Number(match[1]) : 1;
+}
+
+function recoverTenderPositionsFromText(text: string) {
+  const lines = String(text || "")
+    .replace(/\r/g, "\n")
+    .split(/\n+/)
+    .map(cleanTenderLine)
+    .filter(Boolean);
+  const positions: any[] = [];
+  const seen = new Set<string>();
+
+  lines.forEach((line, index) => {
+    const compact = line.replace(/\s+/g, " ");
+    const titleFromDelimited =
+      compact.match(/\b(?:position|role|staff|expert|key expert)\s*[:\-]\s*(.+)$/i)?.[1] ||
+      compact.match(/^\s*\d{1,2}\s*[-.)]\s*(.+)$/)?.[1] ||
+      compact.match(/^(.+?)\s+(?:qty|quantity|no\.?|number)\s*[:\-]?\s*\d{1,2}\b/i)?.[1] ||
+      compact.match(/^(.+?)\s*[-–—:]\s*\d{1,2}\s*(?:nos?\.?|persons?|staff)\b/i)?.[1] ||
+      compact;
+    const title = normalizePositionTitle(titleFromDelimited);
+    if (!isLikelyStaffRoleTitle(title)) return;
+
+    const nearby = lines.slice(index, Math.min(lines.length, index + 8)).join(" ");
+    const key = title.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    positions.push({
+      position_title: title,
+      quantity: extractQuantityFromPositionLine(compact),
+      minimum_education: cleanTenderLine(nearby.match(/\b(?:minimum\s+)?(?:education|qualification)\s*[:\-]\s*(.+?)(?=\b(?:experience|role|responsibil|requirement|skills?)\b|$)/i)?.[1] || ""),
+      minimum_years_experience: Number(nearby.match(/\b(\d{1,2})\+?\s+years?\b/i)?.[1] || 0) || undefined,
+      general_experience: cleanTenderLine(nearby.match(/\bgeneral experience\s*[:\-]\s*(.+?)(?=\bspecific experience\b|$)/i)?.[1] || ""),
+      specific_experience: cleanTenderLine(nearby.match(/\bspecific experience\s*[:\-]\s*(.+?)(?=\b(?:role|responsibil|skills?|minimum)\b|$)/i)?.[1] || ""),
+      role_description: cleanTenderLine(nearby.match(/\b(?:role description|responsibilities|tasks|duties)\s*[:\-]\s*(.+)$/i)?.[1] || ""),
+      required_sector_experience: [],
+      mandatory_skills: [],
+      required_keywords: Array.from(new Set((nearby.match(/\b(?:FIDIC|AutoCAD|Primavera|BIM|GIS|QA\/QC|HSE|PMP|roads?|bridges?|water|wastewater|building|architecture|AI|Copilot)\b/gi) || []).map((item) => item.trim()))),
+      nationality_preference: "",
+      recovered_from_text: true,
+    });
+  });
+
+  return positions;
+}
+
+function postProcessTenderExtraction(parsed: any, rawText: string) {
+  const tender = { ...(parsed || {}) };
+  const existing = Array.isArray(tender.positions) ? tender.positions : [];
+  const recovered = recoverTenderPositionsFromText(rawText);
+  const byTitle = new Map<string, any>();
+
+  [...existing, ...recovered].forEach((position) => {
+    const title = normalizePositionTitle(position.position_title || position.title || position.role || "");
+    if (!title) return;
+    const key = title.toLowerCase();
+    const current = byTitle.get(key) || {};
+    byTitle.set(key, {
+      ...position,
+      ...current,
+      position_title: current.position_title || title,
+      quantity: current.quantity || position.quantity || 1,
+      minimum_education: current.minimum_education || position.minimum_education || "",
+      minimum_years_experience: current.minimum_years_experience || position.minimum_years_experience,
+      general_experience: current.general_experience || position.general_experience || "",
+      specific_experience: current.specific_experience || position.specific_experience || "",
+      role_description: current.role_description || position.role_description || position.description || "",
+      required_sector_experience: current.required_sector_experience || position.required_sector_experience || [],
+      mandatory_skills: current.mandatory_skills || position.mandatory_skills || [],
+      required_keywords: Array.from(new Set([...(current.required_keywords || []), ...(position.required_keywords || [])])),
+      nationality_preference: current.nationality_preference || position.nationality_preference || "",
+      recovered_from_text: Boolean(current.recovered_from_text || position.recovered_from_text),
+    });
+  });
+
+  const positions = Array.from(byTitle.values());
+  return {
+    ...tender,
+    positions,
+    extraction_recovery: {
+      ...(tender.extraction_recovery || {}),
+      tenderPositionsRecoveredFromText: recovered.map((position) => position.position_title),
+    },
+  };
+}
+
 export async function runParseTenderText(text: string): Promise<any> {
   const prompt = `You are an ultra-aggressive, highly analytical, and extremely detail-oriented ultimate tender document extraction AI.
   The user may have provided MULTIPLE documents for a single tender concatenated together (e.g. Primary Tender + Scope/TOR). 
@@ -514,6 +645,9 @@ export async function runParseTenderText(text: string): Promise<any> {
   4. NO DATA LEFT BEHIND: Think about how this data will be used to perfectly match and tailor CVs. Ensure 'scope_summary' and 'special_requirements' are extremely detailed and rich in context.
   5. TEAM-LEVEL CONSTRAINTS: Look for any rules that affect the *whole team* rather than a single position (e.g., "The team must have at least one local citizen", "One member must be a certified auditor"). Extract these into 'global_team_constraints'.
   6. EXHAUSTIVE TENDER TYPE EXTRACTION: In the 'project_sector' array, pick EVERYTHING the job is related to (for example: ["Infrastructure", "Roads", "Bridges", "Construction"]). Be as generous and comprehensive as possible.
+  7. STAFF ROLE TABLES ARE CRITICAL: Search for headings and tables named "Key Experts", "Staff", "Personnel", "Team Composition", "Professional Staff", "Experts Required", "Positions", "Required Experts", "Manpower", "Schedule of Staff", "TOR", and "Terms of Reference". Every role/title in those sections MUST become one item in positions.
+  8. DO NOT CONFUSE CV JOB TITLES WITH TENDER STAFF ROLES: positions[] must contain only roles requested by the tender, not candidate CV roles or company internal roles unless the tender explicitly requests them.
+  9. DEDUPLICATE POSITIONS: If the same staff role appears in several sections, merge it into one position and consolidate all requirements.
 
   Tender Text(s):
   ${text}`;
@@ -536,7 +670,7 @@ export async function runParseTenderText(text: string): Promise<any> {
   } catch (e) {
     console.error("Failed to parse AI JSON for Tender:", e);
   }
-  return parsed;
+  return postProcessTenderExtraction(parsed, text);
 }
 
 // Calculate cosine similarity between two vectors
