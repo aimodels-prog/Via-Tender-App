@@ -12,7 +12,7 @@ function pointCount(value: any) {
   const text = clean(value);
   if (!text) return 0;
   const bulletParts = text
-    .split(/\n+|(?:^|\s)[\-•]\s+/)
+    .split(/\n+|(?:^|\s)[\-\u2022]\s+/)
     .map((part) => part.trim())
     .filter((part) => wordCount(part) >= 4);
   if (bulletParts.length > 1) return bulletParts.length;
@@ -41,7 +41,7 @@ function normalizeSourceText(value: string) {
 function uniqueCleanLines(lines: string[]) {
   const seen = new Set<string>();
   return lines
-    .map((line) => clean(line).replace(/^[-\u2022â€¢]\s*/, "").replace(/[.;]\s*$/, ""))
+    .map((line) => clean(line).replace(/^[-\u2022]\s*/, "").replace(/[.;]\s*$/, ""))
     .filter(Boolean)
     .filter((line) => {
       const key = line.toLowerCase();
@@ -55,7 +55,7 @@ function unwrapNarrativeLines(value: string) {
   const lines = normalizeSourceText(value).split(/\n+/).map(clean).filter(Boolean);
   const joined: string[] = [];
   lines.forEach((line) => {
-    const startsNewPoint = /^[-\u2022â€¢]/.test(line) ||
+    const startsNewPoint = /^[-\u2022]/.test(line) ||
       /^(Name|Date of Birth|Nationality|Proposed Position|Language Known|Qualification|E-Mail|Mobile|Professional Experience|From\b|[A-Z][a-z]{2,8}\.?\s+\d{4}\b|Client|Project Name|Nature of Work|Cost of|Design Consultant|Consultant|Contractor|Responsibility|Work Supervised|Declaration|Place & Date)\b/i.test(line);
     if (!joined.length || startsNewPoint) {
       joined.push(line);
@@ -71,7 +71,59 @@ function normalizedIncludes(haystack: string, needle: string) {
   return value.length >= 4 && haystack.toLowerCase().includes(value);
 }
 
+function dateRangePattern() {
+  const month = "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t)?|Sept(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\.?"
+  return `(?:(?:${month})\\s*\\d{4}|\\d{1,2}\\/\\d{4}|\\d{4})\\s*(?:to|-|\\u2013|\\u2014|\\?)\\s*(?:till\\s+date|present|date|(?:${month})\\s*\\d{4}|\\d{1,2}\\/\\d{4}|\\d{4})`;
+}
+
+function isLikelyEmploymentBoundary(line: string) {
+  const text = clean(line);
+  if (!new RegExp(dateRangePattern(), "i").test(text)) return false;
+  if (/training|course|degree|master|bachelor|erasmus|qualification|signature/i.test(text)) return false;
+  return true;
+}
+
+function getBoundedSourceBlock(rawText: string, item: any) {
+  const lines = normalizeSourceText(rawText).split(/\n+/).map(clean).filter(Boolean);
+  if (!lines.length) return "";
+  const period = clean(item.duration || item.period || `${item.start_date || ""} ${item.end_date || ""}`);
+  const anchors = [
+    item.role,
+    item.organization,
+    item.client,
+    period,
+    item.start_date,
+  ].map(clean).filter((anchor) => anchor.length >= 4);
+
+  let startLine = -1;
+  let bestScore = 0;
+  lines.forEach((line, index) => {
+    const windowText = lines.slice(index, Math.min(lines.length, index + 3)).join(" ").toLowerCase();
+    const score = anchors.filter((anchor) => windowText.includes(anchor.toLowerCase())).length;
+    if (score > bestScore && (score >= 2 || (score >= 1 && isLikelyEmploymentBoundary(line)))) {
+      bestScore = score;
+      startLine = index;
+    }
+  });
+
+  if (startLine < 0) return "";
+  let endLine = lines.length;
+  for (let i = startLine + 1; i < lines.length; i++) {
+    if (isLikelyEmploymentBoundary(lines[i])) {
+      endLine = i;
+      break;
+    }
+    if (/^(Education|Education & Training|Training|Signature|I authorize)\b/i.test(lines[i])) {
+      endLine = i;
+      break;
+    }
+  }
+  return lines.slice(startLine, endLine).join("\n");
+}
+
 function getRelevantSourceWindow(rawText: string, item: any) {
+  const bounded = getBoundedSourceBlock(rawText, item);
+  if (bounded) return bounded;
   const text = clean(rawText);
   if (!text) return "";
   const period = clean(item.duration || item.period || `${item.start_date || ""} ${item.end_date || ""}`);
@@ -103,10 +155,11 @@ function getRelevantSourceWindow(rawText: string, item: any) {
 
 function splitActivityPoints(value: string) {
   return unwrapNarrativeLines(value)
-    .replace(/\s*[•▪◦]\s*/g, "\n")
+    .replace(/\s*[\u2022\u25AA\u25E6]\s*/g, "\n")
     .replace(/\s+-\s+/g, "\n")
     .split(/\n+|;\s+|(?<=[.])\s+(?=(?:Prepared|Reviewed|Designed|Supervised|Managed|Coordinated|Checked|Monitored|Inspected|Handled|Assisted|Conducted|Developed|Evaluated|Ensured|Provided|Responsible|Responsibility|Duties|Responsibilities|The work involved|In addition|Asphalt|Concrete|Soil)\b)/i)
-    .map((line) => clean(line).replace(/^[-•]\s*/, ""))
+    .map((line) => clean(line).replace(/^[-\u2022]\s*/, ""))
+    .filter((line) => !new RegExp(dateRangePattern(), "i").test(line))
     .filter((line) => wordCount(line) >= 5)
     .filter((line) => /responsib|duties|prepared|preparation|designed|reviewed|supervised|supervision|managed|coordinated|checked|checking|analysis|inspection|progress|quality|safety|construction|claims|variation|monitor|estimate|report|site|contract|quantity|survey|boq|invoice|measurement|laboratory|asphalt|concrete|soil|subgrade|subbase|embankment|calibration|compaction|gradation|testing|test|rfi|ncr|hse|marshal|marshall|field density|aashto|astm/i.test(line));
 }
@@ -126,7 +179,7 @@ function mergeActivityDetails(currentDescription: string, sourceWindow: string) 
   const existingLines = current
     ? current
         .split(/\n+/)
-        .map((line) => clean(line).replace(/^[-•]\s*/, ""))
+        .map((line) => clean(line).replace(/^[-\u2022]\s*/, ""))
         .filter(Boolean)
     : [];
 
@@ -144,6 +197,7 @@ export function recoverEmploymentActivitiesFromText(expert: any, rawText: string
   const recoveredIndexes: number[] = [];
   const nextExperiences = experiences.map((item: any, index: number) => {
     const description = clean(item.description);
+    if (item._sourceRecovered || pointCount(description) >= 2) return item;
     const sourceWindow = getRelevantSourceWindow(rawText, item);
     if (!sourceWindow) return item;
 
@@ -187,7 +241,7 @@ export function recoverEmploymentActivitiesFromText(expert: any, rawText: string
 function parseEducationItem(text: string) {
   const value = clean(text)
     .replace(/^(qualification|qualifications|education|academic qualifications|academic)\s*:?\s*/i, "")
-    .replace(/[â€¢ïƒ˜]/g, "")
+    .replace(/[\u2022\uF0D8]/g, "")
     .trim();
   if (!value) return null;
 
@@ -212,7 +266,7 @@ export function recoverEducationFromText(text: string) {
     .search(/\b(additional qualification|computer|professional experience|employment|experience|skills|personal profile|references)\b/i);
   const section = normalized
     .slice(start, endMatch > 0 ? start + endMatch : start + 900)
-    .replace(/[•]/g, " ");
+    .replace(/[\u2022\uF0D8]/g, " ");
   const patterns = [
     /\bQualification\s*:?\s*([^\n.;]{3,180})/gi,
     /\b(?:Ph\.?D\.?|Doctor(?:ate)?|DAE|Diploma|Bachelor|Bachelors|Bachelor's|BSc|B\.?Sc\.?|Master|Masters|MSc|M\.?Sc\.?|MEng|M\.?Eng|Degree|Intermediate|Matriculation)\s+(?:of\s+|in\s+)?[A-Za-z&/.,() -]{3,160}(?=\s+(?:Ph\.?D|Doctor|DAE|Diploma|Bachelor|BSc|B\.?Sc|Master|MSc|MEng|M\.?Eng|Intermediate|Matriculation|Memberships|Skills|Personal Profile|References)|$)/gi,
@@ -222,7 +276,7 @@ export function recoverEducationFromText(text: string) {
   const found = patterns
     .flatMap((pattern) => Array.from(section.matchAll(pattern)).map((match) => match[1] || match[0]))
     .map((item) => item.replace(/^(qualification|education)\s*:?/i, "").trim())
-    .map((item) => item.replace(/[•]/g, "").replace(/\s+/g, " ").trim())
+    .map((item) => item.replace(/[\u2022\uF0D8]/g, "").replace(/\s+/g, " ").trim())
     .filter((item) => wordCount(item) >= 2);
 
   return Array.from(new Set(found)).map(parseEducationItem).filter(Boolean);
@@ -235,6 +289,29 @@ function periodSignature(value: string) {
     .replace(/\bdec\.\b/g, "dec")
     .replace(/\boct\.\b/g, "oct")
     .replace(/\s+/g, " ");
+}
+
+function dateKey(value: any) {
+  return clean(value)
+    .toLowerCase()
+    .replace(/[^\d/a-z]+/g, " ")
+    .replace(/\b(january|jan)\b/g, "jan")
+    .replace(/\b(february|feb)\b/g, "feb")
+    .replace(/\b(march|mar)\b/g, "mar")
+    .replace(/\b(april|apr)\b/g, "apr")
+    .replace(/\b(june|jun)\b/g, "jun")
+    .replace(/\b(july|jul)\b/g, "jul")
+    .replace(/\b(august|aug)\b/g, "aug")
+    .replace(/\b(september|sept|sep)\b/g, "sep")
+    .replace(/\b(october|oct)\b/g, "oct")
+    .replace(/\b(november|nov)\b/g, "nov")
+    .replace(/\b(december|dec)\b/g, "dec")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function isEducationLikeRole(value: any) {
+  return /\b(training|course|degree|master|bachelor|erasmus|qualification|education|faculty|institute|school|university)\b/i.test(clean(value));
 }
 
 function extractFirst(pattern: RegExp, text: string) {
@@ -302,17 +379,76 @@ function extractDescriptionFromBlock(block: string) {
   return fallback.map((line) => `- ${line}`).join("\n");
 }
 
+function extractLineBasedEmploymentBlocksFromText(rawText: string) {
+  const lines = normalizeSourceText(rawText).split(/\n+/).map(clean).filter(Boolean);
+  const boundary = /(?:\d{1,2}\/\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z.]*\s+\d{4})\s*(?:to|-|\u2013|\u2014|\?)\s*(?:Present|present|till date|date|\d{1,2}\/\d{4}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z.]*\s+\d{4})/i;
+  const records: any[] = [];
+  let inEmployment = false;
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (/^(work experience|professional experience|employment|career history)\b/i.test(line)) {
+      inEmployment = true;
+      continue;
+    }
+    if (inEmployment && /^(education|education & training|training|signature|i authorize)\b/i.test(line)) break;
+    if (!inEmployment) continue;
+
+    const match = line.match(boundary);
+    if (!match) continue;
+    const roleTitle = clean(line.slice(0, match.index).replace(/[-\u2013\u2014:]\s*$/, ""));
+    if (!roleTitle || isEducationLikeRole(roleTitle)) continue;
+
+    let end = lines.length;
+    for (let next = index + 1; next < lines.length; next++) {
+      if (/^(education|education & training|training|signature|i authorize)\b/i.test(lines[next]) || boundary.test(lines[next])) {
+        end = next;
+        break;
+      }
+    }
+
+    const body = lines.slice(index + 1, end);
+    const organization = body[0] && !/;|\.$/.test(body[0]) ? body[0] : "";
+    const descriptionLines = body.slice(organization ? 1 : 0);
+    const description = uniqueCleanLines(descriptionLines)
+      .filter((item) => wordCount(item) >= 4)
+      .map((item) => `- ${item}`)
+      .join("\n");
+    const periodMatch = match[0].match(/^(.+?)\s*(?:to|-|\u2013|\u2014|\?)\s*(.+)$/i);
+
+    records.push({
+      duration: `${clean(periodMatch?.[1] || "")} to ${clean(periodMatch?.[2] || "")}`.trim(),
+      start_date: clean(periodMatch?.[1] || ""),
+      end_date: clean(periodMatch?.[2] || ""),
+      organization,
+      client: "",
+      role: roleTitle,
+      country: "",
+      project_name: "",
+      description,
+      _sourceRecovered: true,
+    });
+  }
+
+  return records.filter((item) => item.duration && item.role);
+}
+
 function extractEmploymentBlocksFromText(rawText: string) {
+  const lineBased = extractLineBasedEmploymentBlocksFromText(rawText);
+  if (lineBased.length) return lineBased;
+
   const text = normalizeSourceText(rawText);
-  const month = "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t)?|Sept(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\.?"
-  const periodPattern = new RegExp(`(?:^|\\n)\\s*(?:From\\s+)?((?:${month})\\s*\\d{4})\\s*(?:to|-|–|—)\\s*((?:till\\s+date|present|date)|(?:${month})\\s*\\d{4})\\s*:?`, "gi");
+  const month = "(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t)?|Sept(?:ember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\\.?";
+  const date = `(?:(?:${month})\\s*\\d{4}|\\d{1,2}\\/\\d{4})`;
+  const periodPattern = new RegExp(`(?:^|\\n)\\s*(?:From\\s+)?(?:([^\\n]{0,90}?)\\s+)?(${date})\\s*(?:to|-|\\u2013|\\u2014|\\?)\\s*((?:till\\s+date|present|date)|${date})\\s*:?`, "gi");
   const matches = Array.from(text.matchAll(periodPattern));
 
   return matches.map((match, index) => {
     const start = match.index || 0;
     const end = matches[index + 1]?.index || text.length;
     const block = text.slice(start, end).trim();
-    const period = `${clean(match[1])} to ${clean(match[2])}`;
+    const titleBeforeDate = clean(match[1] || "").replace(/^(From\s+)?/i, "");
+    const period = `${clean(match[2])} to ${clean(match[3])}`;
     const { role, organization } = inferRoleAndOrganization(block);
     const projectName = extractProjectName(block);
     const client = extractClient(block);
@@ -320,17 +456,17 @@ function extractEmploymentBlocksFromText(rawText: string) {
 
     return {
       duration: period,
-      start_date: clean(match[1]),
-      end_date: clean(match[2]),
+      start_date: clean(match[2]),
+      end_date: clean(match[3]),
       organization,
       client,
-      role,
+      role: role || titleBeforeDate,
       country: inferCountryFromBlock(block),
       project_name: projectName,
       description,
       _sourceRecovered: true,
     };
-  }).filter((item) => item.duration && (item.organization || item.role || item.project_name || item.description));
+  }).filter((item) => item.duration && !isEducationLikeRole(item.role) && (item.organization || item.role || item.project_name || item.description));
 }
 
 export function recoverEmploymentRecordsFromText(expert: any, rawText: string) {
@@ -344,11 +480,15 @@ export function recoverEmploymentRecordsFromText(expert: any, rawText: string) {
 
   recovered.forEach((item) => {
     const signature = periodSignature(item.duration);
+    const recoveredStart = dateKey(item.start_date || item.duration);
     const existingIndex = next.findIndex((current: any) => {
       const currentPeriod = periodSignature(current.duration || current.period || `${current.start_date || ""} to ${current.end_date || ""}`);
-      const years = Array.from(new Set(item.duration.match(/\b(19|20)\d{2}\b/g) || []));
+      const years: string[] = Array.from(new Set<string>(item.duration.match(/\b(19|20)\d{2}\b/g) || []));
       const sameYears = years.length >= 2 && years.every((year) => currentPeriod.includes(year));
-      return currentPeriod === signature || sameYears;
+      const currentStart = dateKey(current.start_date || current.duration || current.period);
+      const sameStart = recoveredStart && currentStart && (currentStart.includes(recoveredStart) || recoveredStart.includes(currentStart));
+      const sameRole = clean(current.role).toLowerCase() === clean(item.role).toLowerCase();
+      return currentPeriod === signature || sameYears || sameStart || (sameStart && sameRole);
     });
 
     if (existingIndex >= 0) {
@@ -409,7 +549,7 @@ export function recoverLanguagesFromText(expert: any, rawText: string) {
   const normalizedExisting = existing
     .map((item: any) => {
       if (typeof item === "string") {
-        const [name, level] = item.split(/\s+[-–—]\s+/);
+        const [name, level] = item.split(/\s+[-\u2013\u2014]\s+/);
         return { name: normalizeLanguageName(name), level: clean(level || "") };
       }
       return {
@@ -433,11 +573,11 @@ export function recoverLanguagesFromText(expert: any, rawText: string) {
       .map((line) => clean(line).replace(/^(languages?|language known|language proficiency)\s*:?\s*/i, ""))
       .filter(Boolean)
       .flatMap((line) => {
-        const inline = Array.from(line.matchAll(/\b(English|French|Portuguese|Italian|Spanish|Arabic|Urdu|Hindi|Punjabi|Panjabi|German|Russian|Chinese|Mandarin|Turkish)\b(?:\s*[-–—:]\s*(Native|Fluent|Excellent|Good|Basic|Intermediate|Advanced|Professional|Working))?/gi));
+        const inline = Array.from(line.matchAll(/\b(English|French|Portuguese|Italian|Spanish|Arabic|Urdu|Hindi|Punjabi|Panjabi|German|Russian|Chinese|Mandarin|Turkish)\b(?:\s*[-\u2013\u2014:]\s*(Native|Fluent|Excellent|Good|Basic|Intermediate|Advanced|Professional|Working))?/gi));
         if (inline.length) {
           return inline.map((match) => ({ name: normalizeLanguageName(match[1]), level: clean(match[2] || "") }));
         }
-        const [name, level] = line.split(/\s+[-–—:]\s+/);
+        const [name, level] = line.split(/\s+[-\u2013\u2014:]\s+/);
         const languageName = normalizeLanguageName(name);
         return /^(English|French|Portuguese|Italian|Spanish|Arabic|Urdu|Hindi|Punjabi|Panjabi|German|Russian|Chinese|Mandarin|Turkish)$/i.test(languageName)
           ? [{ name: languageName, level: clean(level || "") }]
@@ -508,9 +648,13 @@ export function strengthenAdequacyFromEmployment(expert: any) {
       return { ...item, client };
     }
 
+    const shouldAppendDescription =
+      description &&
+      !assignment.toLowerCase().includes(description.toLowerCase().slice(0, 80)) &&
+      wordCount(assignment) < Math.max(18, wordCount(description) - 3);
     const lines = [
       assignment || projectName || client,
-      description ? `Responsibilities included ${description.replace(/^performed here my duty as [^.]+\.?\s*/i, "")}` : "",
+      shouldAppendDescription ? description.replace(/^performed here my duty as [^.]+\.?\s*/i, "") : "",
     ].filter(Boolean);
 
     return {
