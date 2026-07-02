@@ -14,6 +14,7 @@ import { google } from "googleapis";
 import { v4 as uuidv4 } from "uuid";
 import { initPostgres, query, writeLog } from "./src/backend/postgres.ts";
 import { normalizeExpertCollections } from "./src/lib/cvPostProcess.ts";
+import { normalizeTenderRecord } from "./src/lib/tenderPostProcess.ts";
 
 type AuthUser = {
   id: string;
@@ -126,6 +127,9 @@ function withData(row: any) {
     created_at: row.created_at ?? data.created_at,
     updatedAt: row.updated_at ?? data.updatedAt,
   };
+  if (row.tender_title !== undefined || hydrated.positions || hydrated.scope_summary) {
+    return normalizeTenderRecord(hydrated);
+  }
   return row.full_name !== undefined || hydrated.experiences || hydrated.education || hydrated.languages
     ? normalizeExpertCollections(hydrated)
     : hydrated;
@@ -743,13 +747,13 @@ async function startServer() {
   app.post("/api/tenders", requireAuth, async (req, res) => {
     const tender = req.body || {};
     const id = tender.id || `tender_${uuidv4()}`;
-    const data = {
+    const data = normalizeTenderRecord({
       ...tender,
       id,
       status: tender.status || "OPEN",
       created_at: tender.created_at || new Date().toISOString(),
       positions: (tender.positions || []).map((p: any, i: number) => ({ ...p, id: p.id || `pos_${Date.now()}_${i}` })),
-    };
+    });
     await query(
       `insert into tenders (id, tender_title, client, status, deadline, data)
        values ($1,$2,$3,$4,$5,$6::jsonb)`,
@@ -762,7 +766,7 @@ async function startServer() {
   app.patch("/api/tenders/:id", requireAuth, async (req, res) => {
     const current = await query(`select * from tenders where id = $1`, [req.params.id]);
     if (!current.rowCount) return res.status(404).json({ error: "Tender not found." });
-    const next = { ...(current.rows[0].data || {}), ...req.body, id: req.params.id, updatedAt: new Date().toISOString() };
+    const next = normalizeTenderRecord({ ...(current.rows[0].data || {}), ...req.body, id: req.params.id, updatedAt: new Date().toISOString() });
     const result = await query(
       `update tenders set tender_title = $2, client = $3, status = $4, deadline = $5, data = $6::jsonb, updated_at = now()
        where id = $1 returning *`,

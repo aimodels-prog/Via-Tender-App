@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import { ALL_PRIMARY_POSITIONS } from '../lib/constants.ts';
 import { extractUniversalTenderFacts, mergeSourceEvidence } from '../lib/universalExtraction.ts';
+import { normalizeTenderRecord } from '../lib/tenderPostProcess.ts';
 
 function getAI() {
   const rawKey = process.env.GEMINI_API_KEY || "";
@@ -626,7 +627,7 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
   });
 
   const positions = Array.from(byTitle.values());
-  return {
+  return normalizeTenderRecord({
     ...tender,
     positions,
     extraction_recovery: {
@@ -634,7 +635,7 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
       tenderPositionsRecoveredFromText: recovered.map((position) => position.position_title),
     },
     source_evidence: mergeSourceEvidence(tender.source_evidence, universalFacts.sourceEvidence),
-  };
+  });
 }
 
 export async function runParseTenderText(text: string): Promise<any> {
@@ -653,6 +654,7 @@ export async function runParseTenderText(text: string): Promise<any> {
   7. STAFF ROLE TABLES ARE CRITICAL: Search for headings and tables named "Key Experts", "Staff", "Personnel", "Team Composition", "Professional Staff", "Experts Required", "Positions", "Required Experts", "Manpower", "Schedule of Staff", "TOR", and "Terms of Reference". Every role/title in those sections MUST become one item in positions.
   8. DO NOT CONFUSE CV JOB TITLES WITH TENDER STAFF ROLES: positions[] must contain only roles requested by the tender, not candidate CV roles or company internal roles unless the tender explicitly requests them.
   9. DEDUPLICATE POSITIONS: If the same staff role appears in several sections, merge it into one position and consolidate all requirements.
+  10. FINAL JSON ONLY: Never include your internal reasoning, uncertainty, "Wait", "I will", or explanatory notes inside any JSON field. If the tender gives alternative rules such as "20 years, 10 years for Omanis", write the requirement once as a concise factual requirement, not as a chain of thoughts.
 
   Tender Text(s):
   ${text}`;
@@ -710,13 +712,23 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 }
 
 export async function runVectorMatchEngine(tender: any, positionId: string, experts: any[]): Promise<any[]> {
+  tender = normalizeTenderRecord(tender || {});
   // Step 1: Find target position
   const position = tender.positions.find((p:any) => p.id?.toString() === positionId || p.position_title === positionId);
   if (!position) throw new Error("Position not found");
 
   // Provide a naive text overlap score for initial ranking since we don't have a real vector DB populated
   // We will score based on matching keywords from the position title and requirements against the expert's text.
-  const reqLower = (position.position_title + " " + (position.requirements?.join(" ") || "") + " " + (position.description || "")).toLowerCase();
+  const reqLower = [
+    position.position_title,
+    position.minimum_education,
+    position.general_experience,
+    position.specific_experience,
+    position.role_description,
+    ...(position.required_sector_experience || []),
+    ...(position.mandatory_skills || []),
+    ...(position.required_keywords || []),
+  ].join(" ").toLowerCase();
   const reqWords = Array.from(new Set(reqLower.match(/\b\w{4,}\b/g) || []));
 
   const scoredExperts = experts.map((e: any) => {
