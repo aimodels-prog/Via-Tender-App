@@ -13,6 +13,7 @@ import { createServer as createViteServer } from "vite";
 import { google } from "googleapis";
 import { v4 as uuidv4 } from "uuid";
 import { initPostgres, query, writeLog } from "./src/backend/postgres.ts";
+import { normalizeExpertCollections } from "./src/lib/cvPostProcess.ts";
 
 type AuthUser = {
   id: string;
@@ -119,12 +120,15 @@ async function saveSetting(key: string, value: any) {
 function withData(row: any) {
   if (!row) return null;
   const data = row.data || {};
-  return {
+  const hydrated = {
     ...data,
     id: row.id ?? data.id,
     created_at: row.created_at ?? data.created_at,
     updatedAt: row.updated_at ?? data.updatedAt,
   };
+  return row.full_name !== undefined || hydrated.experiences || hydrated.education || hydrated.languages
+    ? normalizeExpertCollections(hydrated)
+    : hydrated;
 }
 
 function normalizeDeadline(value: any) {
@@ -676,12 +680,13 @@ async function startServer() {
     let added = 0;
     let updated = 0;
     for (const expert of experts) {
-      const fullName = (expert.fullName || expert.name || "").trim();
+      const normalizedExpert = normalizeExpertCollections(expert);
+      const fullName = (normalizedExpert.fullName || normalizedExpert.name || "").trim();
       const existing = fullName
         ? await query(`select id from experts where lower(full_name) = lower($1) limit 1`, [fullName])
         : { rows: [] };
-      const id = existing.rows[0]?.id || expert.id || `expert_${uuidv4()}`;
-      const data = { ...expert, id, updatedAt: new Date().toISOString() };
+      const id = existing.rows[0]?.id || normalizedExpert.id || `expert_${uuidv4()}`;
+      const data = { ...normalizedExpert, id, updatedAt: new Date().toISOString() };
       await query(
         `insert into experts (id, full_name, primary_position, role, data)
          values ($1,$2,$3,$4,$5::jsonb)
@@ -691,7 +696,7 @@ async function startServer() {
            role = excluded.role,
            data = excluded.data,
            updated_at = now()`,
-        [id, fullName, expert.primary_position || expert.primaryPosition || expert.role || "Uncategorized", expert.role, JSON.stringify(data)],
+        [id, fullName, normalizedExpert.primary_position || normalizedExpert.primaryPosition || normalizedExpert.role || "Uncategorized", normalizedExpert.role, JSON.stringify(data)],
       );
       existing.rows[0]?.id ? updated++ : added++;
     }
@@ -702,7 +707,7 @@ async function startServer() {
   app.patch("/api/experts/:id", requireAuth, async (req, res) => {
     const current = await query(`select * from experts where id = $1`, [req.params.id]);
     if (!current.rowCount) return res.status(404).json({ error: "Expert not found." });
-    const next = { ...(current.rows[0].data || {}), ...req.body, id: req.params.id, updatedAt: new Date().toISOString() };
+    const next = normalizeExpertCollections({ ...(current.rows[0].data || {}), ...req.body, id: req.params.id, updatedAt: new Date().toISOString() });
     const result = await query(
       `update experts set full_name = $2, primary_position = $3, role = $4, data = $5::jsonb, updated_at = now()
        where id = $1 returning *`,

@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import { api } from '../lib/api';
 import { ALL_PRIMARY_POSITIONS } from '../lib/constants';
 import { translateExpertData } from '../lib/gemini';
+import { normalizeExpertCollections } from '../lib/cvPostProcess';
 
 interface AddExpertModalProps {
   isOpen: boolean;
@@ -37,33 +38,34 @@ const Accordion = ({ title, icon, children, defaultOpen = false, count = null }:
 }
 
 export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData }: AddExpertModalProps) {
+  const normalizedInitialData = initialData ? normalizeExpertCollections(initialData) : undefined;
   const [formData, setFormData] = useState({
-    id: initialData?.id || '',
-    fullName: initialData?.fullName || initialData?.name || '',
-    email: initialData?.email || '',
-    phone: initialData?.phone || '',
-    primary_position: initialData?.primary_position || '',
-    role: initialData?.role || '',
-    location: initialData?.location || '',
-    countries: initialData?.countries?.join(', ') || '',
-    educationLevel: initialData?.educationLevel || '',
-    experienceYears: initialData?.experienceYears || '',
-    type: initialData?.type || 'External',
-    skills: initialData?.skills?.join(', ') || '',
-    software: initialData?.software?.join(', ') || '',
-    dateOfBirth: initialData?.dateOfBirth || '',
-    countryOfCitizenship: initialData?.countryOfCitizenship || '',
-    profileSummary: initialData?.profileSummary || '',
-    availability: initialData?.availability || '',
-    languages: initialData?.metadata?.languages?.map((l: any) => l.name).join(', ') || initialData?.languages?.join(', ') || '',
-    certifications: initialData?.metadata?.certifications?.map((c: any) => c.title).join(', ') || initialData?.certifications?.join(', ') || ''
+    id: normalizedInitialData?.id || '',
+    fullName: normalizedInitialData?.fullName || normalizedInitialData?.name || '',
+    email: normalizedInitialData?.email || '',
+    phone: normalizedInitialData?.phone || '',
+    primary_position: normalizedInitialData?.primary_position || '',
+    role: normalizedInitialData?.role || '',
+    location: normalizedInitialData?.location || '',
+    countries: normalizedInitialData?.countries?.join(', ') || '',
+    educationLevel: normalizedInitialData?.educationLevel || '',
+    experienceYears: normalizedInitialData?.experienceYears || '',
+    type: normalizedInitialData?.type || 'External',
+    skills: normalizedInitialData?.skills?.join(', ') || '',
+    software: normalizedInitialData?.software?.join(', ') || '',
+    dateOfBirth: normalizedInitialData?.dateOfBirth || '',
+    countryOfCitizenship: normalizedInitialData?.countryOfCitizenship || '',
+    profileSummary: normalizedInitialData?.profileSummary || '',
+    availability: normalizedInitialData?.availability || '',
+    languages: normalizedInitialData?.languages?.join(', ') || '',
+    certifications: normalizedInitialData?.metadata?.certifications?.map((c: any) => c.title).join(', ') || normalizedInitialData?.certifications?.join(', ') || ''
   });
 
-  const [educations, setEducations] = useState<any[]>(initialData?.metadata?.educations || []);
-  const [experiences, setExperiences] = useState<any[]>(initialData?.experiences || initialData?.metadata?.experiences || []);
-  const [adequacyAssignments, setAdequacyAssignments] = useState<any[]>(initialData?.adequacy_experience || initialData?.metadata?.adequacy || []);
-  const [projects, setProjects] = useState<any[]>(initialData?.projects || []);
-  const [unmappedData, setUnmappedData] = useState<any[]>(initialData?.metadata?.unmapped_data || []);
+  const [educations, setEducations] = useState<any[]>(normalizedInitialData?.metadata?.educations || []);
+  const [experiences, setExperiences] = useState<any[]>(normalizedInitialData?.experiences || normalizedInitialData?.metadata?.experiences || []);
+  const [adequacyAssignments, setAdequacyAssignments] = useState<any[]>(normalizedInitialData?.adequacy_experience || normalizedInitialData?.metadata?.adequacy || []);
+  const [projects, setProjects] = useState<any[]>(normalizedInitialData?.projects || []);
+  const [unmappedData, setUnmappedData] = useState<any[]>(normalizedInitialData?.metadata?.unmapped_data || []);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -82,32 +84,33 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
 
   React.useEffect(() => {
     if (initialData) {
+      const normalized = normalizeExpertCollections(initialData);
       setFormData({
-        id: initialData.id || '',
-        fullName: initialData.fullName || initialData.name || '',
-        email: initialData.email || '',
-        phone: initialData.phone || '',
-        primary_position: initialData.primary_position || '',
-        role: initialData.role || '',
-        location: initialData.location || '',
-        countries: initialData.countries?.join(', ') || '',
-        educationLevel: initialData.educationLevel || '',
-        experienceYears: initialData.experienceYears || '',
-        type: initialData.type || 'External',
-        skills: initialData.skills?.join(', ') || '',
-        software: initialData.software?.join(', ') || '',
-        dateOfBirth: initialData.dateOfBirth || '',
-        countryOfCitizenship: initialData.countryOfCitizenship || '',
-        profileSummary: initialData.profileSummary || '',
-        availability: initialData.availability || '',
-        languages: initialData.metadata?.languages?.map((l: any)=>l.name).join(', ') || initialData.languages?.join(', ') || '',
-        certifications: initialData.metadata?.certifications?.map((c: any)=>c.title).join(', ') || initialData.certifications?.join(', ') || ''
+        id: normalized.id || '',
+        fullName: normalized.fullName || normalized.name || '',
+        email: normalized.email || '',
+        phone: normalized.phone || '',
+        primary_position: normalized.primary_position || '',
+        role: normalized.role || '',
+        location: normalized.location || '',
+        countries: normalized.countries?.join(', ') || '',
+        educationLevel: normalized.educationLevel || '',
+        experienceYears: normalized.experienceYears || '',
+        type: normalized.type || 'External',
+        skills: normalized.skills?.join(', ') || '',
+        software: normalized.software?.join(', ') || '',
+        dateOfBirth: normalized.dateOfBirth || '',
+        countryOfCitizenship: normalized.countryOfCitizenship || '',
+        profileSummary: normalized.profileSummary || '',
+        availability: normalized.availability || '',
+        languages: normalized.languages?.join(', ') || '',
+        certifications: normalized.metadata?.certifications?.map((c: any)=>c.title).join(', ') || normalized.certifications?.join(', ') || ''
       });
-      setEducations(initialData.metadata?.educations || []);
-      setExperiences(initialData.experiences || initialData.metadata?.experiences || []);
-      setAdequacyAssignments(initialData.adequacy_experience || initialData.metadata?.adequacy || []);
-      setProjects(initialData.projects || []);
-      setUnmappedData(initialData.metadata?.unmapped_data || []);
+      setEducations(normalized.metadata?.educations || []);
+      setExperiences(normalized.experiences || normalized.metadata?.experiences || []);
+      setAdequacyAssignments(normalized.adequacy_experience || normalized.metadata?.adequacy || []);
+      setProjects(normalized.projects || []);
+      setUnmappedData(normalized.metadata?.unmapped_data || []);
     }
   }, [initialData]);
 
@@ -169,7 +172,7 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
     e.preventDefault();
     setIsSubmitting(true);
     
-    const newExpert = {
+    const newExpert = normalizeExpertCollections({
       ...formData,
       primary_position: formData.primary_position || '',
       countries: formData.countries ? formData.countries.split(',').map(c => c.trim()).filter(Boolean) : [],
@@ -186,7 +189,7 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
         adequacy: adequacyAssignments,
         unmapped_data: unmappedData
       }
-    };
+    });
 
     try {
       if (initialData?.id) {

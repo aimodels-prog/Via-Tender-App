@@ -22,7 +22,7 @@ import clsx from 'clsx';
 import { api, extractDocumentFromFile } from '../lib/api';
 import { auditExtractedCV, parseCVText } from '../lib/gemini';
 import { extractContactsFromText, mergeRecoveredContacts } from '../lib/contactExtraction';
-import { postProcessExtractedExpert } from '../lib/cvPostProcess';
+import { normalizeExpertCollections, postProcessExtractedExpert } from '../lib/cvPostProcess';
 import { useTasks } from '../lib/TasksContext';
 import AddExpertModal from '../components/AddExpertModal';
 import { EditExpertRoleModal } from '../components/EditExpertRoleModal';
@@ -539,20 +539,23 @@ export default function Experts() {
     setIsSavingExtractedExperts(true);
     try {
       const approvedAt = new Date().toISOString();
-      const approvedExperts = pendingExtractedExperts.map((expert) => ({
-        ...expert,
-        extraction_audit: {
-          ...(expert.extraction_audit || {}),
-          approvedJson: {
-            ...expert,
-            extraction_audit: undefined,
+      const approvedExperts = pendingExtractedExperts.map((expert) => {
+        const normalizedExpert = normalizeExpertCollections(expert);
+        return {
+          ...normalizedExpert,
+          extraction_audit: {
+            ...(normalizedExpert.extraction_audit || {}),
+            approvedJson: {
+              ...normalizedExpert,
+              extraction_audit: undefined,
+            },
+            approval: {
+              approvedAt,
+              approvedBy: "local-user",
+            },
           },
-          approval: {
-            approvedAt,
-            approvedBy: "local-user",
-          },
-        },
-      }));
+        };
+      });
       const saveResult = await api.saveExperts(approvedExperts);
       const googleFileIds: string[] = Array.from(
         new Set(

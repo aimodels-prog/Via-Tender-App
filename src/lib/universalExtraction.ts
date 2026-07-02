@@ -190,7 +190,7 @@ function parseLanguages(sections: TextSection[], allLines: TextLine[]) {
   const lines = sourceSections.length ? sourceSections.flatMap((section) => section.lines.map((line) => ({ ...line, section: section.heading }))) : allLines.map((line) => ({ ...line, section: undefined }));
   const languages: Array<{ name: string; level: string }> = [];
   const sourceEvidence: SourceEvidence[] = [];
-  const languagePattern = new RegExp(`\\b(${LANGUAGE_NAMES.join("|")})\\b(?:\\s*[-–—:]\\s*(Native|Fluent|Excellent|Good|Basic|Intermediate|Advanced|Professional|Working))?`, "gi");
+  const languagePattern = new RegExp(`\\b(${LANGUAGE_NAMES.join("|")})\\b(?:\\s*[-\\u2013\\u2014:]\\s*(Native|Fluent|Excellent|Good|Basic|Intermediate|Advanced|Professional|Working))?`, "gi");
 
   for (const line of lines) {
     for (const match of line.text.matchAll(languagePattern)) {
@@ -212,17 +212,26 @@ function parseEducation(sections: TextSection[], allLines: TextLine[]) {
   const education: UniversalCVFacts["education"] = [];
   const sourceEvidence: SourceEvidence[] = [];
   const eduPattern = /\b(Ph\.?D\.?|Doctor(?:ate)?|DAE|Diploma|Bachelor'?s?|B\.?Sc\.?|Master'?s?|M\.?Sc\.?|M\.?Eng|MEng|Degree|Qualification to practice|Erasmus|Training in Artificial Intelligence)\b(?:\s+(?:of|in)\s+|\s+)?([^,\n;]{0,120})?/i;
+  const stopPattern = /\b(work experience|professional experience|employment|languages?|skills?|software|signature|certifications?|publications?)\b/i;
 
   for (const line of lines) {
+    if (stopPattern.test(line.text) && !eduPattern.test(line.text)) continue;
     const text = line.text.replace(/^(qualification|education|education & training)\s*:?\s*/i, "");
     const match = text.match(eduPattern);
     if (!match) continue;
     const full = clean(text);
+    if (/^to practice as\b/i.test(full)) continue;
     const parentheticalField = full.match(/\(([^)]+)\)/)?.[1] || "";
-    const inferredField = parentheticalField || clean(match[2] || "").match(/\b(Civil|Architecture|Product Design|Artificial Intelligence|Engineering|Construction Management|Quantity Surveying)\b/i)?.[0] || "";
+    const degreeText = clean(match[1]);
+    const rest = clean(match[2] || "");
+    const inferredField = parentheticalField || rest.match(/\b(Civil Engineering|Civil|Architecture|Product Design|Artificial Intelligence|Engineering|Construction Management|Quantity Surveying)\b/i)?.[0] || "";
+    const institution = clean(full.match(/\b(?:at|from)\s+([^,;]+?)(?:,|\b(?:19|20)\d{2}\b|$)/i)?.[1] || "");
+    const year = clean(full.match(/\b(?:19|20)\d{2}\b|\b\d{2}\/(?:19|20)\d{2}\b(?:\s*[-\u2013\u2014]\s*(?:\d{2}\/(?:19|20)\d{2}|Present))?/i)?.[0] || "");
     education.push({
-      degree: full,
+      degree: full.length <= 160 ? full : degreeText,
       field: inferredField,
+      institution,
+      year,
       notes: full,
     });
     sourceEvidence.push(evidence("education", full, line, line.section));

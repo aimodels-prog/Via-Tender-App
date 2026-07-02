@@ -27,6 +27,101 @@ function hasMeaningfulEducation(value: any) {
   });
 }
 
+function formatLanguage(value: any) {
+  if (typeof value === "string") return clean(value);
+  const name = clean(value?.name || value?.language);
+  const level = clean(value?.level || value?.proficiency || value?.fluency);
+  return name ? (level ? `${name} - ${level}` : name) : "";
+}
+
+function normalizeLanguageObjects(value: any) {
+  const items = Array.isArray(value) ? value : value ? [value] : [];
+  const byName = new Map<string, any>();
+  items.forEach((item) => {
+    const text = typeof item === "string" ? item : formatLanguage(item);
+    const [rawName, ...levelParts] = text.split(/\s+[-\u2013\u2014:]\s+/);
+    const name = clean(typeof item === "string" ? rawName : item?.name || item?.language || rawName);
+    const level = clean(typeof item === "string" ? levelParts.join(" - ") : item?.level || item?.proficiency || item?.fluency || levelParts.join(" - "));
+    if (!name) return;
+    const key = name.toLowerCase();
+    const existing = byName.get(key);
+    byName.set(key, { name, level: existing?.level || level });
+  });
+  return Array.from(byName.values());
+}
+
+function formatEducation(value: any) {
+  if (typeof value === "string") return clean(value);
+  return clean([
+    value?.degree && value?.field && !String(value.degree).toLowerCase().includes(String(value.field).toLowerCase())
+      ? `${value.degree} in ${value.field}`
+      : value?.degree || value?.field,
+    value?.institution,
+    value?.location,
+    value?.year,
+    value?.grade,
+    value?.notes && !clean(value?.degree).includes(clean(value?.notes)) ? value.notes : "",
+  ].filter(Boolean).join(", "));
+}
+
+function normalizeEducationObjects(value: any) {
+  const items = Array.isArray(value) ? value : value ? [value] : [];
+  const normalized = items
+    .map((item) => {
+      if (typeof item !== "string") {
+        return {
+          degree: clean(item?.degree || item?.qualification || item?.title),
+          field: clean(item?.field || item?.fieldOfStudy || item?.major),
+          institution: clean(item?.institution || item?.school || item?.university),
+          year: clean(item?.year || item?.date || item?.period),
+          location: clean(item?.location || item?.country),
+          grade: clean(item?.grade || item?.gpa),
+          notes: clean(item?.notes),
+        };
+      }
+      const text = clean(item);
+      return { degree: text, field: "", institution: "", year: clean(text.match(/\b(?:19|20)\d{2}\b|\b\d{2}\/(?:19|20)\d{2}\b/)?.[0] || ""), location: "", grade: "", notes: "" };
+    })
+    .filter((item) => {
+      const text = formatEducation(item);
+      if (wordCount(text) < 2) return false;
+      if (/^to practice as\b/i.test(text)) return false;
+      if (/to practice as/i.test(item.degree) && !/\b(architect|engineer|engineering|architecture|bachelor|master|diploma|ph\.?d|degree)\b/i.test(item.degree)) return false;
+      return true;
+    });
+
+  const seen = new Set<string>();
+  return normalized.filter((item) => {
+    const key = formatEducation(item).toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+export function normalizeExpertCollections(expert: any) {
+  const languageObjects = normalizeLanguageObjects([
+    ...(Array.isArray(expert?.metadata?.languages) ? expert.metadata.languages : []),
+    ...(Array.isArray(expert?.languages) ? expert.languages : expert?.languages ? [expert.languages] : []),
+  ]);
+  const educationObjects = normalizeEducationObjects([
+    ...(Array.isArray(expert?.metadata?.educations) ? expert.metadata.educations : []),
+    ...(Array.isArray(expert?.education) ? expert.education : expert?.education ? [expert.education] : []),
+  ]);
+
+  return {
+    ...expert,
+    languages: languageObjects.map(formatLanguage).filter(Boolean),
+    education: educationObjects.map(formatEducation).filter(Boolean),
+    educationLevel: expert?.educationLevel || formatEducation(educationObjects[0]),
+    metadata: {
+      ...(expert?.metadata || {}),
+      languages: languageObjects,
+      educations: educationObjects,
+    },
+  };
+}
+
 function normalizeSourceText(value: string) {
   return String(value || "")
     .replace(/\r/g, "\n")
@@ -632,13 +727,18 @@ export function strengthenAdequacyFromEmployment(expert: any) {
 
   const strongerAdequacy = adequacy.map((item: any, index: number) => {
     const assignment = clean(item.assignment);
-    const matchingExperience =
-      experiences.find((exp: any) => {
-        const samePeriod = clean(exp.duration || exp.period).toLowerCase() === clean(item.period).toLowerCase();
-        const sameRole = clean(exp.role).toLowerCase() === clean(item.position).toLowerCase();
-        const sameClient = clean(exp.client).toLowerCase() && clean(item.client).toLowerCase().includes(clean(exp.client).toLowerCase());
-        return samePeriod || sameRole || sameClient;
-      }) || experiences[index];
+    const matchingExperience = experiences.find((exp: any) => {
+      const expPeriod = clean(exp.duration || exp.period).toLowerCase();
+      const itemPeriod = clean(item.period).toLowerCase();
+      const expRole = clean(exp.role).toLowerCase();
+      const itemRole = clean(item.position).toLowerCase();
+      const expClient = clean(exp.client || exp.organization || exp.employer).toLowerCase();
+      const itemClient = clean(item.client).toLowerCase();
+      const samePeriod = expPeriod && itemPeriod && (expPeriod === itemPeriod || expPeriod.includes(itemPeriod) || itemPeriod.includes(expPeriod));
+      const sameRole = expRole && itemRole && (expRole === itemRole || expRole.includes(itemRole) || itemRole.includes(expRole));
+      const sameClient = expClient && itemClient && (expClient === itemClient || expClient.includes(itemClient) || itemClient.includes(expClient));
+      return samePeriod || (sameRole && sameClient);
+    }) || (!existingAdequacy.length ? experiences[index] : null);
 
     const description = clean(matchingExperience?.description);
     const projectName = clean(matchingExperience?.project_name);
@@ -685,7 +785,7 @@ export function strengthenAdequacyFromEmployment(expert: any) {
 }
 
 export function postProcessExtractedExpert(expert: any, rawText: string) {
-  let next = { ...expert };
+  let next = normalizeExpertCollections({ ...expert });
   const universalFacts = extractUniversalCVFacts(rawText);
 
   if (!next.email && universalFacts.contacts.emails[0]) {
@@ -748,5 +848,5 @@ export function postProcessExtractedExpert(expert: any, rawText: string) {
     },
   };
 
-  return strengthenAdequacyFromEmployment(next);
+  return normalizeExpertCollections(strengthenAdequacyFromEmployment(next));
 }
