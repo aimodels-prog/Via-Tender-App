@@ -53,6 +53,20 @@ const ALL_COLUMNS = [
   { id: 'actions', label: 'ACTIONS' },
 ];
 
+const asArray = (value: any): any[] => Array.isArray(value) ? value : value ? [value] : [];
+const fieldText = (value: any, mapper?: (item: any) => string) =>
+  asArray(value)
+    .map((item) => mapper ? mapper(item) : (typeof item === 'string' ? item : item?.name || item?.title || item?.language || item?.value || ''))
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .join(', ');
+const educationListText = (value: any) =>
+  asArray(value)
+    .map((item) => typeof item === 'string' ? item : [item?.degree, item?.field, item?.institution, item?.location, item?.year].filter(Boolean).join(', '))
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .join('\n');
+
 export default function Experts() {
   const { isAdmin } = useAuth();
   const [experts, setExperts] = useState<any[]>([]);
@@ -704,7 +718,7 @@ export default function Experts() {
 
   const filteredExperts = experts.filter(e => {
     const name = e.name || "";
-    const skills = e.skills || [];
+    const skills = asArray(e.skills);
     const expertType = e.type || "External";
     
     const matchesSearch = name.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -727,18 +741,18 @@ export default function Experts() {
       if (key === 'primary_position') return (e.primary_position || "").toLowerCase().includes(lowerValue);
       if (key === 'role') return (e.role || "").toLowerCase().includes(lowerValue);
       if (key === 'location') return (e.location || "").toLowerCase().includes(lowerValue);
-      if (key === 'countries') return (e.countries?.join(', ') || "").toLowerCase().includes(lowerValue);
+      if (key === 'countries') return fieldText(e.countries).toLowerCase().includes(lowerValue);
       if (key === 'education') return (e.educationLevel || e.metadata?.educations?.[0]?.degree || e.education?.[0] || "").toLowerCase().includes(lowerValue);
       if (key === 'experience') return (e.experienceYears?.toString() || e.employment_history?.length?.toString() || e.experiences?.length?.toString() || "").toLowerCase().includes(lowerValue);
       if (key === 'type') return (e.type || "External").toLowerCase().includes(lowerValue);
-      if (key === 'skills') return (e.skills?.join(', ') || "").toLowerCase().includes(lowerValue);
-      if (key === 'awards') return (e.metadata?.awards?.map((a:any) => a.title).join(', ') || "").toLowerCase().includes(lowerValue);
-      if (key === 'languages') return (e.metadata?.languages?.map((l:any) => l.name).join(', ') || e.languages?.map((l:any) => l.language || l).join(', ') || "").toLowerCase().includes(lowerValue);
-      if (key === 'certifications') return (e.metadata?.certifications?.map((c:any) => c.title).join(', ') || "").toLowerCase().includes(lowerValue);
-      if (key === 'software') return (e.software?.join(', ') || "").toLowerCase().includes(lowerValue);
+      if (key === 'skills') return fieldText(e.skills).toLowerCase().includes(lowerValue);
+      if (key === 'awards') return fieldText(e.metadata?.awards, (a:any) => a.title).toLowerCase().includes(lowerValue);
+      if (key === 'languages') return (fieldText(e.metadata?.languages, (l:any) => l.name || l.language) || fieldText(e.languages)).toLowerCase().includes(lowerValue);
+      if (key === 'certifications') return fieldText(e.metadata?.certifications, (c:any) => c.title).toLowerCase().includes(lowerValue);
+      if (key === 'software') return fieldText(e.software).toLowerCase().includes(lowerValue);
       if (key === 'dateOfBirth') return (e.dateOfBirth || "").toLowerCase().includes(lowerValue);
       if (key === 'citizenship') return (e.countryOfCitizenship || e.nationality || "").toLowerCase().includes(lowerValue);
-      if (key === 'professionalMembership') return (e.professionalMembership?.join(', ') || "").toLowerCase().includes(lowerValue);
+      if (key === 'professionalMembership') return fieldText(e.professionalMembership).toLowerCase().includes(lowerValue);
       if (key === 'createdAt') return ((e.createdAt || e.created_at) ? new Date(e.createdAt || e.created_at).toLocaleDateString() : "").toLowerCase().includes(lowerValue);
 
       return true;
@@ -755,18 +769,18 @@ export default function Experts() {
       if (k === 'primary_position') return (e.primary_position || "").toLowerCase();
       if (k === 'role') return (e.role || "").toLowerCase();
       if (k === 'location') return (e.location || "").toLowerCase();
-      if (k === 'countries') return (e.countries?.join(', ') || "").toLowerCase();
+      if (k === 'countries') return fieldText(e.countries).toLowerCase();
       if (k === 'education') return (e.educationLevel || e.metadata?.educations?.[0]?.degree || e.education?.[0] || "").toLowerCase();
       if (k === 'experience') return parseInt(e.experienceYears || e.employment_history?.length || e.experiences?.length || 0);
       if (k === 'type') return (e.type || "External").toLowerCase();
-      if (k === 'skills') return (e.skills?.join(', ') || "").toLowerCase();
-      if (k === 'awards') return (e.metadata?.awards?.map((x:any) => x.title).join(', ') || "").toLowerCase();
-      if (k === 'languages') return (e.metadata?.languages?.map((l:any) => l.name).join(', ') || e.languages?.map((l:any) => l.language || l).join(', ') || "").toLowerCase();
-      if (k === 'certifications') return (e.metadata?.certifications?.map((c:any) => c.title).join(', ') || "").toLowerCase();
-      if (k === 'software') return (e.software?.join(', ') || "").toLowerCase();
+      if (k === 'skills') return fieldText(e.skills).toLowerCase();
+      if (k === 'awards') return fieldText(e.metadata?.awards, (x:any) => x.title).toLowerCase();
+      if (k === 'languages') return (fieldText(e.metadata?.languages, (l:any) => l.name || l.language) || fieldText(e.languages)).toLowerCase();
+      if (k === 'certifications') return fieldText(e.metadata?.certifications, (c:any) => c.title).toLowerCase();
+      if (k === 'software') return fieldText(e.software).toLowerCase();
       if (k === 'dateOfBirth') return (e.dateOfBirth || "").toLowerCase();
       if (k === 'citizenship') return (e.countryOfCitizenship || e.nationality || "").toLowerCase();
-      if (k === 'professionalMembership') return (e.professionalMembership?.join(', ') || "").toLowerCase();
+      if (k === 'professionalMembership') return fieldText(e.professionalMembership).toLowerCase();
       if (k === 'createdAt') return new Date(e.createdAt || e.created_at || 0).getTime();
       return "";
     };
@@ -1106,7 +1120,7 @@ export default function Experts() {
                       <td className="px-6 py-4 text-sm text-slate-600">{expert.location || '-'}</td>
                     )}
                     {visibleColumns.includes('countries') && (
-                      <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[250px]">{expert.countries?.join(', ') || '-'}</td>
+                      <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[250px]">{fieldText(expert.countries) || '-'}</td>
                     )}
                     {visibleColumns.includes('education') && (
                       <td className="px-6 py-4 text-sm text-slate-600">{expert.educationLevel || expert.metadata?.educations?.[0]?.degree || expert.education?.[0] || '-'}</td>
@@ -1124,10 +1138,10 @@ export default function Experts() {
                     {visibleColumns.includes('skills') && (
                       <td className="px-6 py-4">
                         <div className="flex gap-1 flex-wrap max-w-[300px]">
-                          {expert.skills?.slice(0, 2).map((s: string, idx: number) => (
+                          {asArray(expert.skills).slice(0, 2).map((s: string, idx: number) => (
                              <span key={idx} className="truncate max-w-[80px] bg-white border border-slate-200 text-slate-600 text-xs px-1.5 py-0.5 rounded">{s}</span>
                           ))}
-                          {expert.skills?.length > 2 && <span className="text-slate-400 text-xs py-0.5">+{expert.skills.length - 2}</span>}
+                          {asArray(expert.skills).length > 2 && <span className="text-slate-400 text-xs py-0.5">+{asArray(expert.skills).length - 2}</span>}
                         </div>
                       </td>
                     )}
@@ -1135,13 +1149,13 @@ export default function Experts() {
                       <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[200px]">{expert.metadata?.awards?.length ? expert.metadata.awards[0].title : '-'}</td>
                     )}
                     {visibleColumns.includes('languages') && (
-                      <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[200px]">{expert.metadata?.languages?.map((l:any) => typeof l === 'string' ? l : l.name)?.join(', ') || expert.languages?.map((l:any) => typeof l === 'string' ? l : l.language)?.join(', ') || '-'}</td>
+                      <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[200px]">{fieldText(expert.metadata?.languages, (l:any) => typeof l === 'string' ? l : l.name || l.language) || fieldText(expert.languages) || '-'}</td>
                     )}
                     {visibleColumns.includes('certifications') && (
-                      <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[250px]">{expert.metadata?.certifications?.map((c:any) => c.title)?.join(', ') || '-'}</td>
+                      <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[250px]">{fieldText(expert.metadata?.certifications, (c:any) => c.title) || '-'}</td>
                     )}
                     {visibleColumns.includes('software') && (
-                      <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[250px]">{expert.software?.join(', ') || '-'}</td>
+                      <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[250px]">{fieldText(expert.software) || '-'}</td>
                     )}
                     {visibleColumns.includes('dateOfBirth') && (
                       <td className="px-6 py-4 text-sm text-slate-600">{expert.dateOfBirth || '-'}</td>
@@ -1150,7 +1164,7 @@ export default function Experts() {
                       <td className="px-6 py-4 text-sm text-slate-600">{expert.countryOfCitizenship || expert.nationality || '-'}</td>
                     )}
                     {visibleColumns.includes('professionalMembership') && (
-                      <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[250px]">{expert.professionalMembership?.join(', ') || '-'}</td>
+                      <td className="px-6 py-4 text-sm text-slate-600 truncate max-w-[250px]">{fieldText(expert.professionalMembership) || '-'}</td>
                     )}
                     {visibleColumns.includes('createdAt') && (
                       <td className="px-6 py-4 text-sm text-slate-600">{(expert.created_at || expert.createdAt) ? new Date(expert.created_at || expert.createdAt).toLocaleDateString() : '-'}</td>
@@ -1276,12 +1290,12 @@ export default function Experts() {
                           <div className="text-sm text-slate-600">{expert.primary_position || "-"} · {expert.role || "Uncategorized"} · {expert.original_cv_filename || "Uploaded CV"}</div>
                           {expert.extraction_audit?.extractionMetadata?.likelyAttachmentPages?.length > 0 && (
                             <div className="text-xs text-amber-700 mt-1">
-                              Used pages {expert.extraction_audit.extractionMetadata.usedPages.join(", ")} of {expert.extraction_audit.extractionMetadata.totalPages}; ignored likely scanned/attachment pages {expert.extraction_audit.extractionMetadata.likelyAttachmentPages.join(", ")}.
+                              Used pages {fieldText(expert.extraction_audit.extractionMetadata.usedPages)} of {expert.extraction_audit.extractionMetadata.totalPages}; ignored likely scanned/attachment pages {fieldText(expert.extraction_audit.extractionMetadata.likelyAttachmentPages)}.
                             </div>
                           )}
                           {expert.extraction_audit?.auditNotes?.length > 0 && (
                             <div className="text-xs text-blue-700 mt-1">
-                              AI audit: {expert.extraction_audit.auditNotes.slice(0, 3).join(" · ")}
+                              AI audit: {asArray(expert.extraction_audit.auditNotes).slice(0, 3).join(" · ")}
                             </div>
                           )}
                         </div>
@@ -1341,14 +1355,14 @@ export default function Experts() {
                             </div>
                             <label className="space-y-1">
                               <span className="text-xs font-semibold text-slate-600">Education Details</span>
-                              <textarea value={(expert.education || expert.metadata?.educations || []).map((e: any) => typeof e === 'string' ? e : [e.degree, e.field, e.institution, e.location, e.year].filter(Boolean).join(', ')).join('\n')} onChange={(e) => updatePendingExpert(idx, { education: e.target.value.split('\n').map((line) => line.trim()).filter(Boolean) })} rows={3} className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm resize-y" />
+                              <textarea value={educationListText(expert.education || expert.metadata?.educations)} onChange={(e) => updatePendingExpert(idx, { education: e.target.value.split('\n').map((line) => line.trim()).filter(Boolean) })} rows={3} className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm resize-y" />
                               {expert.extraction_recovery?.educationRecoveredFromRawText?.length > 0 && (
                                 <span className="text-[11px] font-medium text-emerald-700">Education recovered from raw CV text</span>
                               )}
                             </label>
                             <label className="space-y-1">
                               <span className="text-xs font-semibold text-slate-600">Software</span>
-                              <textarea value={(expert.software || []).join(', ')} onChange={(e) => updatePendingExpert(idx, { software: e.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} rows={2} className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm resize-y" />
+                              <textarea value={fieldText(expert.software)} onChange={(e) => updatePendingExpert(idx, { software: e.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} rows={2} className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm resize-y" />
                             </label>
                             <details className="border border-slate-200 rounded-md bg-white">
                               <summary className="cursor-pointer px-3 py-2 text-sm font-semibold text-slate-700">Profile Summary</summary>

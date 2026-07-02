@@ -37,6 +37,14 @@ const Accordion = ({ title, icon, children, defaultOpen = false, count = null }:
   )
 }
 
+const toArray = (value: any): any[] => Array.isArray(value) ? value : value ? [value] : [];
+const joinValues = (value: any, mapper?: (item: any) => string) =>
+  toArray(value)
+    .map((item) => mapper ? mapper(item) : (typeof item === 'string' ? item : item?.name || item?.title || item?.value || ''))
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .join(', ');
+
 export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData }: AddExpertModalProps) {
   const normalizedInitialData = initialData ? normalizeExpertCollections(initialData) : undefined;
   const [formData, setFormData] = useState({
@@ -47,18 +55,18 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
     primary_position: normalizedInitialData?.primary_position || '',
     role: normalizedInitialData?.role || '',
     location: normalizedInitialData?.location || '',
-    countries: normalizedInitialData?.countries?.join(', ') || '',
+    countries: joinValues(normalizedInitialData?.countries),
     educationLevel: normalizedInitialData?.educationLevel || '',
     experienceYears: normalizedInitialData?.experienceYears || '',
     type: normalizedInitialData?.type || 'External',
-    skills: normalizedInitialData?.skills?.join(', ') || '',
-    software: normalizedInitialData?.software?.join(', ') || '',
+    skills: joinValues(normalizedInitialData?.skills),
+    software: joinValues(normalizedInitialData?.software),
     dateOfBirth: normalizedInitialData?.dateOfBirth || '',
     countryOfCitizenship: normalizedInitialData?.countryOfCitizenship || '',
     profileSummary: normalizedInitialData?.profileSummary || '',
     availability: normalizedInitialData?.availability || '',
-    languages: normalizedInitialData?.languages?.join(', ') || '',
-    certifications: normalizedInitialData?.metadata?.certifications?.map((c: any) => c.title).join(', ') || normalizedInitialData?.certifications?.join(', ') || ''
+    languages: joinValues(normalizedInitialData?.languages),
+    certifications: joinValues(normalizedInitialData?.metadata?.certifications, (c: any) => c.title) || joinValues(normalizedInitialData?.certifications)
   });
 
   const [educations, setEducations] = useState<any[]>(normalizedInitialData?.metadata?.educations || []);
@@ -93,18 +101,18 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
         primary_position: normalized.primary_position || '',
         role: normalized.role || '',
         location: normalized.location || '',
-        countries: normalized.countries?.join(', ') || '',
+        countries: joinValues(normalized.countries),
         educationLevel: normalized.educationLevel || '',
         experienceYears: normalized.experienceYears || '',
         type: normalized.type || 'External',
-        skills: normalized.skills?.join(', ') || '',
-        software: normalized.software?.join(', ') || '',
+        skills: joinValues(normalized.skills),
+        software: joinValues(normalized.software),
         dateOfBirth: normalized.dateOfBirth || '',
         countryOfCitizenship: normalized.countryOfCitizenship || '',
         profileSummary: normalized.profileSummary || '',
         availability: normalized.availability || '',
-        languages: normalized.languages?.join(', ') || '',
-        certifications: normalized.metadata?.certifications?.map((c: any)=>c.title).join(', ') || normalized.certifications?.join(', ') || ''
+        languages: joinValues(normalized.languages),
+        certifications: joinValues(normalized.metadata?.certifications, (c: any) => c.title) || joinValues(normalized.certifications)
       });
       setEducations(normalized.metadata?.educations || []);
       setExperiences(normalized.experiences || normalized.metadata?.experiences || []);
@@ -152,10 +160,10 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
         fullName: translated.fullName || translated.name || prev.fullName,
         primary_position: translated.primary_position || prev.primary_position,
         location: translated.location || prev.location,
-        countries: translated.countries?.join(', ') || prev.countries,
+        countries: joinValues(translated.countries) || prev.countries,
         educationLevel: translated.educationLevel || prev.educationLevel,
-        skills: translated.skills?.join(', ') || prev.skills,
-        software: translated.software?.join(', ') || prev.software,
+        skills: joinValues(translated.skills) || prev.skills,
+        software: joinValues(translated.software) || prev.software,
         countryOfCitizenship: translated.countryOfCitizenship || prev.countryOfCitizenship,
         profileSummary: translated.profileSummary || prev.profileSummary,
         availability: translated.availability || prev.availability
@@ -500,11 +508,11 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
                       // merge new parsed data into current form
                       setFormData(prev => ({
                         ...prev, ...rep, id: prev.id, original_cv_text: initialData.original_cv_text, original_cv_url: initialData.original_cv_url, original_cv_filename: initialData.original_cv_filename,
-                        languages: rep.metadata?.languages?.map((l: any)=>l.name).join(', ') || rep.languages?.join(', ') || prev.languages,
-                        certifications: rep.metadata?.certifications?.map((c: any)=>c.title).join(', ') || rep.certifications?.join(', ') || prev.certifications,
-                        skills: rep.skills?.join(', ') || prev.skills,
-                        software: rep.software?.join(', ') || prev.software,
-                        countries: rep.countries?.join(', ') || prev.countries,
+                        languages: joinValues(rep.metadata?.languages, (l: any) => l.name) || joinValues(rep.languages) || prev.languages,
+                        certifications: joinValues(rep.metadata?.certifications, (c: any) => c.title) || joinValues(rep.certifications) || prev.certifications,
+                        skills: joinValues(rep.skills) || prev.skills,
+                        software: joinValues(rep.software) || prev.software,
+                        countries: joinValues(rep.countries) || prev.countries,
                       }));
                       setEducations(rep.metadata?.educations || rep.education || []);
                       setExperiences(rep.experiences || rep.employment_history || []);
