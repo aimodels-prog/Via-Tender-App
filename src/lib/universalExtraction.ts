@@ -122,6 +122,16 @@ export function toTextLines(rawText: string): TextLine[] {
     .filter((line) => line.text);
 }
 
+function reconstructTenderLineBreaks(rawText: string) {
+  return normalizeRawText(rawText)
+    .replace(/\s+(JOB\s+TITLE\s+)/gi, "\n$1")
+    .replace(/\s+(LIST OF\s+(?:CONCULTANCY|CONSULTANCY)\s+PERSONNEL)\b/gi, "\n$1")
+    .replace(/\s+(\d{1,2}\s+[A-Z][A-Za-z /&().-]*?(?:Engineer|Surveyor|Inspector|Controller|Manager|Specialist|Coordinator|Supervisor|Architect|Planner|Advisor|Officer|Technician)\s+\d{1,2}(?:\s+\d{1,2}){0,2})(?=\s+\d{1,2}\s+[A-Z]|(?:\s+\*)|$)/g, "\n$1")
+    .replace(/\s+(Role\s*&\s*Responsibilities)\b/gi, "\n$1")
+    .replace(/\s+(Qualification)\b/gi, "\n$1")
+    .replace(/\s+(Experience)\b/gi, "\n$1");
+}
+
 function normalizeHeading(value: string) {
   return clean(value).replace(/[:：]\s*$/, "").toLowerCase();
 }
@@ -324,6 +334,8 @@ function normalizePositionTitle(value: string) {
   return clean(value)
     .replace(/^[\d.)\-\s]+/, "")
     .replace(/^job\s+title\s*/i, "")
+    .replace(/^requirements in construction phase\s+/i, "")
+    .replace(/\s*\(\s*omani only\s*\)\s*$/i, "")
     .replace(/\b(no\.?|number|qty|personnel|staff|expert|key expert|position|role)\b\s*:?\s*/gi, "")
     .replace(/\s*\(\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*\)\s*$/i, "")
     .replace(/\s*[-–—:]\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*$/i, "")
@@ -362,7 +374,7 @@ function extractQuantity(line: string) {
 function extractJobTitlePositions(lines: TextLine[]) {
   const positions: any[] = [];
   const seen = new Set<string>();
-  const titlePattern = /\bJOB\s+TITLE\s+(.+)$/i;
+  const titlePattern = /\bJOB\s+TITLE\s+(.+?)(?=\s+(?:Location|Qualification|Experience|Role\s*&\s*Responsibilities)\b|$)/i;
   const stopPattern = /\bJOB\s+TITLE\b|^\d{1,2}\.\d+\.|^--\s*\d+\s+of\s+\d+\s*--|^LIST OF\b|^Item\b/i;
 
   lines.forEach((line, index) => {
@@ -374,7 +386,7 @@ function extractJobTitlePositions(lines: TextLine[]) {
     if (!key || seen.has(key)) return;
     seen.add(key);
 
-    const blockLines: string[] = [];
+    const blockLines: string[] = [line.text.slice((titleMatch.index || 0) + titleMatch[0].length)];
     for (let i = index + 1; i < Math.min(lines.length, index + 45); i++) {
       const text = lines[i].text;
       if (stopPattern.test(text)) break;
@@ -438,7 +450,7 @@ function extractPersonnelTablePositions(lines: TextLine[]) {
 }
 
 export function extractUniversalTenderFacts(rawText: string): UniversalTenderFacts {
-  const lines = toTextLines(rawText);
+  const lines = toTextLines(reconstructTenderLineBreaks(rawText));
   const positions: any[] = [];
   const sourceEvidence: SourceEvidence[] = [];
   const seen = new Set<string>();
