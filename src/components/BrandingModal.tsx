@@ -16,34 +16,54 @@ export function BrandingModal({ tender, onClose, onSave }: BrandingModalProps) {
     header_name: "",
     footer_name: ""
   });
+  const [savedBranding, setSavedBranding] = useState({
+    header_base64: "",
+    footer_base64: "",
+    header_name: "",
+    footer_name: ""
+  });
+  const [brandingSelection, setBrandingSelection] = useState(tender.branding?.source === "none" ? "none" : "default");
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     async function loadDefaults() {
       const globalBranding = await api.getGlobalBranding();
-      setBranding((prev: any) => ({
-        ...prev,
-        header_base64: prev.header_base64 || globalBranding.header_base64 || "",
-        footer_base64: prev.footer_base64 || globalBranding.footer_base64 || "",
-        header_name: prev.header_name || globalBranding.header_name || "",
-        footer_name: prev.footer_name || globalBranding.footer_name || "",
-      }));
+      setSavedBranding(globalBranding || {
+        header_base64: "",
+        footer_base64: "",
+        header_name: "",
+        footer_name: ""
+      });
+      if (brandingSelection === "default") {
+        setBranding({
+          header_base64: globalBranding.header_base64 || "",
+          footer_base64: globalBranding.footer_base64 || "",
+          header_name: globalBranding.header_name || "",
+          footer_name: globalBranding.footer_name || "",
+          source: "globalBranding",
+        });
+      }
     }
     loadDefaults();
   }, []);
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'header' | 'footer') => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      setBranding((prev: any) => ({
-        ...prev,
-        [type === 'header' ? 'header_base64' : 'footer_base64']: reader.result,
-        [type === 'header' ? 'header_name' : 'footer_name']: file.name
-      }));
-    };
-    reader.readAsDataURL(file);
+  const handleBrandingSelection = (value: string) => {
+    setBrandingSelection(value);
+    setBranding(value === "default"
+      ? {
+          header_base64: savedBranding.header_base64 || "",
+          footer_base64: savedBranding.footer_base64 || "",
+          header_name: savedBranding.header_name || "",
+          footer_name: savedBranding.footer_name || "",
+          source: "globalBranding",
+        }
+      : {
+          header_base64: "",
+          footer_base64: "",
+          header_name: "",
+          footer_name: "",
+          source: "none",
+        });
   };
 
   const handleSave = async () => {
@@ -81,6 +101,17 @@ export function BrandingModal({ tender, onClose, onSave }: BrandingModalProps) {
         <div className="p-6 space-y-6 overflow-y-auto">
           <section className="space-y-4">
             <h4 className="text-sm font-semibold text-slate-800">Visual Identity (Headers & Footers)</h4>
+            <div className="max-w-sm">
+              <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide block mb-1">Branding Source</label>
+              <select
+                value={brandingSelection}
+                onChange={(e) => handleBrandingSelection(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+              >
+                <option value="default">Saved default branding</option>
+                <option value="none">No branding</option>
+              </select>
+            </div>
             <div className="grid grid-cols-2 gap-6">
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide block">Document Header</label>
@@ -91,13 +122,9 @@ export function BrandingModal({ tender, onClose, onSave }: BrandingModalProps) {
                   ) : (
                     <div className="flex flex-col items-center gap-1.5">
                        <ImageIcon size={24} className="text-slate-400 group-hover:text-blue-500 transition-colors" />
-                       <span className="text-xs font-medium text-slate-500 group-hover:text-blue-600 transition-colors text-center">Upload Template<br/>Header</span>
+                       <span className="text-xs font-medium text-slate-500 group-hover:text-blue-600 transition-colors text-center">No saved<br/>Header</span>
                     </div>
                   )}
-                  <label className="absolute inset-0 bg-white/70 opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer transition-opacity z-10 font-semibold text-blue-600 text-sm backdrop-blur-[1px]">
-                    Update Image
-                    <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'header')} />
-                  </label>
                 </div>
                 <p className="text-xs text-slate-500 truncate">
                   {branding.header_name ? `Using ${branding.header_name}` : 'No saved header'}
@@ -113,13 +140,9 @@ export function BrandingModal({ tender, onClose, onSave }: BrandingModalProps) {
                   ) : (
                     <div className="flex flex-col items-center gap-1.5">
                        <ImageIcon size={24} className="text-slate-400 group-hover:text-blue-500 transition-colors" />
-                       <span className="text-xs font-medium text-slate-500 group-hover:text-blue-600 transition-colors text-center">Upload Template<br/>Footer</span>
+                       <span className="text-xs font-medium text-slate-500 group-hover:text-blue-600 transition-colors text-center">No saved<br/>Footer</span>
                     </div>
                   )}
-                  <label className="absolute inset-0 bg-white/70 opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer transition-opacity z-10 font-semibold text-blue-600 text-sm backdrop-blur-[1px]">
-                    Update Image
-                    <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'footer')} />
-                  </label>
                 </div>
                 <p className="text-xs text-slate-500 truncate">
                   {branding.footer_name ? `Using ${branding.footer_name}` : 'No saved footer'}
@@ -132,7 +155,7 @@ export function BrandingModal({ tender, onClose, onSave }: BrandingModalProps) {
         <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between shrink-0 rounded-b-xl">
            <div className="flex items-center gap-2">
              <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-             <span className="text-sm font-medium text-slate-600">Saved defaults are used unless this tender overrides them</span>
+             <span className="text-sm font-medium text-slate-600">Branding is selected from saved database defaults</span>
            </div>
            <div className="flex items-center gap-3">
              <button type="button" onClick={onClose} className="px-5 py-2.5 bg-white border border-slate-200 text-slate-700 rounded-lg font-medium text-sm hover:bg-slate-50 transition-colors shadow-sm">

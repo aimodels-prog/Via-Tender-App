@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Save, Layers, User, Calendar, Edit2, AlertCircle, Loader2, Image as ImageIcon } from 'lucide-react';
+import { X, Save, AlertCircle, Loader2, Image as ImageIcon } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 
@@ -21,18 +21,21 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
     branding: tender.branding || { header_base64: "", footer_base64: "", header_name: "", footer_name: "" }
   });
   const [isSaving, setIsSaving] = useState(false);
+  const [savedBranding, setSavedBranding] = useState({ header_base64: "", footer_base64: "", header_name: "", footer_name: "" });
+  const [brandingSelection, setBrandingSelection] = useState("default");
 
   useEffect(() => {
     async function loadGlobalBranding() {
       const globalBranding = await api.getGlobalBranding();
+      setSavedBranding(globalBranding || { header_base64: "", footer_base64: "", header_name: "", footer_name: "" });
       setEditedTender((prev: any) => ({
         ...prev,
         branding: {
-          ...prev.branding,
-          header_base64: prev.branding?.header_base64 || globalBranding.header_base64 || "",
-          footer_base64: prev.branding?.footer_base64 || globalBranding.footer_base64 || "",
-          header_name: prev.branding?.header_name || globalBranding.header_name || "",
-          footer_name: prev.branding?.footer_name || globalBranding.footer_name || "",
+          header_base64: globalBranding.header_base64 || "",
+          footer_base64: globalBranding.footer_base64 || "",
+          header_name: globalBranding.header_name || "",
+          footer_name: globalBranding.footer_name || "",
+          source: "globalBranding",
         }
       }));
     }
@@ -45,61 +48,26 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
     setEditedTender({ ...editedTender, positions: newPositions });
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>, type: 'header' | 'footer') => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    
-    const maxFileSizeMb = 1;
-    if (file.size > maxFileSizeMb * 1024 * 1024) {
-      alert(`Image is too large. Please select an image under ${maxFileSizeMb}MB.`);
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-        
-        const MAX_WIDTH = 1200;
-        const MAX_HEIGHT = 800; // Headers/footers usually wide
-        
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height = Math.round(height * (MAX_WIDTH / width));
-            width = MAX_WIDTH;
+  const handleBrandingSelection = (value: string) => {
+    setBrandingSelection(value);
+    setEditedTender((prev: any) => ({
+      ...prev,
+      branding: value === "default"
+        ? {
+            header_base64: savedBranding.header_base64 || "",
+            footer_base64: savedBranding.footer_base64 || "",
+            header_name: savedBranding.header_name || "",
+            footer_name: savedBranding.footer_name || "",
+            source: "globalBranding",
           }
-        } else {
-          if (height > MAX_HEIGHT) {
-            width = Math.round(width * (MAX_HEIGHT / height));
-            height = MAX_HEIGHT;
-          }
-        }
-        
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, width, height);
-        
-        const compressedBase64 = canvas.toDataURL('image/png'); // DOCX supports PNG/JPG/GIF/BMP reliably.
-        
-        setEditedTender((prev: any) => ({
-          ...prev,
-          branding: {
-            ...prev.branding,
-            [type === 'header' ? 'header_base64' : 'footer_base64']: compressedBase64,
-            [type === 'header' ? 'header_name' : 'footer_name']: file.name
-          }
-        }));
-      };
-      
-      if (typeof reader.result === 'string') {
-        img.src = reader.result;
-      }
-    };
-    reader.readAsDataURL(file);
+        : {
+            header_base64: "",
+            footer_base64: "",
+            header_name: "",
+            footer_name: "",
+            source: "none",
+          },
+    }));
   };
 
   const handleSave = async () => {
@@ -276,6 +244,18 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Tender Branding</h3>
             </div>
+
+            <div className="mb-4 max-w-sm">
+              <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Branding Source</label>
+              <select
+                value={brandingSelection}
+                onChange={(e) => handleBrandingSelection(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+              >
+                <option value="default">Saved default branding</option>
+                <option value="none">No branding</option>
+              </select>
+            </div>
             
             <div className="grid grid-cols-2 gap-6">
               <div className="space-y-3">
@@ -287,13 +267,9 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                   ) : (
                     <div className="flex flex-col items-center gap-2">
                        <ImageIcon size={20} className="text-slate-400" />
-                       <span className="text-[9px] text-slate-500 font-bold uppercase tracking-tighter text-center">Upload Tender<br/>Header</span>
+                       <span className="text-[9px] text-slate-500 font-bold uppercase tracking-tighter text-center">No saved<br/>Header</span>
                     </div>
                   )}
-                  <label className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer transition-opacity z-10">
-                    <span className="text-[10px] font-bold text-white uppercase tracking-widest">Update Image</span>
-                    <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'header')} />
-                  </label>
                 </div>
                 <p className="text-xs text-slate-500 truncate">
                   {editedTender.branding?.header_name ? `Using ${editedTender.branding.header_name}` : 'No saved header'}
@@ -309,13 +285,9 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                   ) : (
                     <div className="flex flex-col items-center gap-2">
                        <ImageIcon size={20} className="text-slate-400" />
-                       <span className="text-[9px] text-slate-500 font-bold uppercase tracking-tighter text-center">Upload Tender<br/>Footer</span>
+                       <span className="text-[9px] text-slate-500 font-bold uppercase tracking-tighter text-center">No saved<br/>Footer</span>
                     </div>
                   )}
-                  <label className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 flex items-center justify-center cursor-pointer transition-opacity z-10">
-                    <span className="text-[10px] font-bold text-white uppercase tracking-widest">Update Image</span>
-                    <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(e, 'footer')} />
-                  </label>
                 </div>
                 <p className="text-xs text-slate-500 truncate">
                   {editedTender.branding?.footer_name ? `Using ${editedTender.branding.footer_name}` : 'No saved footer'}
