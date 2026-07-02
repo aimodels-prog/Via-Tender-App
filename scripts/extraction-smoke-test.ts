@@ -1,11 +1,19 @@
 import fs from "fs";
 import mammoth from "mammoth";
+import { PDFParse } from "pdf-parse";
 import { extractUniversalCVFacts, extractUniversalTenderFacts } from "../src/lib/universalExtraction.ts";
 import { normalizeExpertCollections, postProcessExtractedExpert } from "../src/lib/cvPostProcess.ts";
 
 async function readDocxText(path: string) {
   const result = await mammoth.extractRawText({ buffer: fs.readFileSync(path) });
   return result.value;
+}
+
+async function readPdfText(path: string) {
+  const parser = new PDFParse({ data: fs.readFileSync(path) });
+  const result = await parser.getText();
+  await parser.destroy();
+  return result.text;
 }
 
 async function main() {
@@ -63,6 +71,24 @@ async function main() {
   const tenderFacts = extractUniversalTenderFacts(tenderText);
   console.log("Tender role facts:", tenderFacts.positions.map((item) => item.position_title));
   if (tenderFacts.positions.length < 3) throw new Error("Expected tender role recovery to find at least 3 positions.");
+
+  const torPaths = [
+    "C:/Users/Dell/Downloads/TOR 2024.OM.RFP.49_1.pdf",
+    "C:/Users/Dell/Downloads/TOR 2024.OM.RFP.49_2.pdf",
+  ];
+  if (torPaths.every((path) => fs.existsSync(path))) {
+    const torText = (await Promise.all(torPaths.map(readPdfText))).map((text, index) => `--- TENDER DOC ${index + 1} ---\n${text}`).join("\n\n");
+    const torFacts = extractUniversalTenderFacts(torText);
+    const titles = torFacts.positions.map((item) => item.position_title);
+    console.log("TOR 2024.OM.RFP.49 role facts:", titles);
+    const expectedTitles = ["Resident Engineer", "Civil Engineer", "Material Engineer", "Quantity Surveyor", "Land Surveyor", "Site Inspector", "Material / Lab Inspector", "Document Controller"];
+    expectedTitles.forEach((title) => {
+      if (!titles.includes(title)) throw new Error(`Expected TOR role recovery to include ${title}.`);
+    });
+    if (torFacts.positions.length !== expectedTitles.length) throw new Error(`Expected TOR role recovery to find ${expectedTitles.length} positions, got ${torFacts.positions.length}.`);
+  } else {
+    console.log("TOR 2024.OM.RFP.49 samples not found; skipping local PDF tender smoke check.");
+  }
 }
 
 main().catch((error) => {

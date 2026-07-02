@@ -527,7 +527,7 @@ function cleanTenderLine(value: any) {
 function normalizePositionTitle(value: string) {
   return cleanTenderLine(value)
     .replace(/^[\d.)\-\s]+/, "")
-    .replace(/\b(no\.?|number|qty|quantity|personnel|staff|expert|key expert|position|role)\b\s*:?\s*/gi, "")
+    .replace(/\b(no\.?|number|qty|personnel|staff|expert|key expert|position|role)\b\s*:?\s*/gi, "")
     .replace(/\s*\(\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*\)\s*$/i, "")
     .replace(/\s*[-–—:]\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*$/i, "")
     .replace(/\s+(?:qty|quantity|no\.?|number)\s*[:\-]?\s*\d{1,2}\s*$/i, "")

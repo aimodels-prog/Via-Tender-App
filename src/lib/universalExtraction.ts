@@ -323,12 +323,23 @@ export function extractUniversalCVFacts(rawText: string): UniversalCVFacts {
 function normalizePositionTitle(value: string) {
   return clean(value)
     .replace(/^[\d.)\-\s]+/, "")
-    .replace(/\b(no\.?|number|qty|quantity|personnel|staff|expert|key expert|position|role)\b\s*:?\s*/gi, "")
+    .replace(/^job\s+title\s*/i, "")
+    .replace(/\b(no\.?|number|qty|personnel|staff|expert|key expert|position|role)\b\s*:?\s*/gi, "")
     .replace(/\s*\(\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*\)\s*$/i, "")
     .replace(/\s*[-–—:]\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*$/i, "")
     .replace(/\s+(?:qty|quantity|no\.?|number)\s*[:\-]?\s*\d{1,2}\s*$/i, "")
     .replace(/\s+\d{1,2}\s*$/i, "")
     .replace(/[.;:,]\s*$/, "")
+    .trim();
+}
+
+function positionKey(value: string) {
+  return normalizePositionTitle(value)
+    .toLowerCase()
+    .replace(/\bomani only\b/g, "")
+    .replace(/\bmaterials engineer\b/g, "material engineer")
+    .replace(/[()]/g, "")
+    .replace(/\s+/g, " ")
     .trim();
 }
 
@@ -348,11 +359,121 @@ function extractQuantity(line: string) {
   return match ? Number(match[1]) : 1;
 }
 
+function extractJobTitlePositions(lines: TextLine[]) {
+  const positions: any[] = [];
+  const seen = new Set<string>();
+  const titlePattern = /\bJOB\s+TITLE\s+(.+)$/i;
+  const stopPattern = /\bJOB\s+TITLE\b|^\d{1,2}\.\d+\.|^--\s*\d+\s+of\s+\d+\s*--|^LIST OF\b|^Item\b/i;
+
+  lines.forEach((line, index) => {
+    const titleMatch = line.text.match(titlePattern);
+    if (!titleMatch) return;
+    const title = normalizePositionTitle(titleMatch[1]);
+    if (!isLikelyTenderPosition(title)) return;
+    const key = positionKey(title);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+
+    const blockLines: string[] = [];
+    for (let i = index + 1; i < Math.min(lines.length, index + 45); i++) {
+      const text = lines[i].text;
+      if (stopPattern.test(text)) break;
+      blockLines.push(text);
+    }
+    const block = blockLines.join(" ");
+    positions.push({
+      position_title: title,
+      quantity: 1,
+      minimum_education: clean(block.match(/\bQualification\s+(.+?)(?=\bExperience\b|\bRole\s*&\s*Responsibilities\b|$)/i)?.[1] || ""),
+      minimum_years_experience: Number(block.match(/\bminimum\s+(\d{1,2})\s+years?\b/i)?.[1] || 0) || undefined,
+      general_experience: clean(block.match(/\bExperience\s+(.+?)(?=\bRole\s*&\s*Responsibilities\b|$)/i)?.[1] || ""),
+      specific_experience: clean(block.match(/\bExperience\s+(.+?)(?=\bRole\s*&\s*Responsibilities\b|$)/i)?.[1] || ""),
+      role_description: clean(block.match(/\bRole\s*&\s*Responsibilities\s*(?:\(but not limited to\))?\s*(.+)$/i)?.[1] || ""),
+      required_sector_experience: [],
+      mandatory_skills: [],
+      required_keywords: Array.from(new Set((block.match(/\b(?:FIDIC|AutoCAD|Primavera|BIM|GIS|QA\/QC|HSE|PMP|roads?|bridges?|laboratory|asphalt|earthworks?|survey|quantity|document control)\b/gi) || []).map((item) => item.trim()))),
+      nationality_preference: /\bomani only\b/i.test(titleMatch[1]) ? "Omani only" : "",
+      recovered_from_text: true,
+      recovery_source: "job_title_section",
+    });
+  });
+  return positions;
+}
+
+function extractPersonnelTablePositions(lines: TextLine[]) {
+  const positions: any[] = [];
+  const seen = new Set<string>();
+  const startIndex = lines.findIndex((line) => /LIST OF\s+CONCULTANCY\s+PERSONNEL|LIST OF\s+CONSULTANCY\s+PERSONNEL/i.test(line.text));
+  if (startIndex < 0) return positions;
+
+  const tableLines = lines.slice(startIndex, Math.min(lines.length, startIndex + 45));
+  const rowPattern = /^(?:\d{1,2}\s+)?([A-Za-z][A-Za-z /&().-]*?(?:Engineer|Surveyor|Inspector|Controller|Manager|Specialist|Coordinator|Supervisor|Architect|Planner|Advisor|Officer|Technician))(?:\s+(\d{1,2}))?(?:\s+\d{1,2})?(?:\s+\d{1,2})?$/i;
+  tableLines.forEach((line) => {
+    const text = clean(line.text);
+    if (/^(Item|No\.|Total|Required|Personnel|Omani|National|Expatriate|Requirements|phase|\*)\b/i.test(text)) return;
+    const match = text.match(rowPattern);
+    if (!match) return;
+    const title = normalizePositionTitle(match[1]);
+    if (!isLikelyTenderPosition(title)) return;
+    const key = positionKey(title);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    positions.push({
+      position_title: title,
+      quantity: Number(match[2] || 1),
+      minimum_education: "",
+      minimum_years_experience: undefined,
+      general_experience: "",
+      specific_experience: "",
+      role_description: "",
+      required_sector_experience: [],
+      mandatory_skills: [],
+      required_keywords: [],
+      nationality_preference: "",
+      recovered_from_text: true,
+      recovery_source: "personnel_table",
+    });
+  });
+  return positions;
+}
+
 export function extractUniversalTenderFacts(rawText: string): UniversalTenderFacts {
   const lines = toTextLines(rawText);
   const positions: any[] = [];
   const sourceEvidence: SourceEvidence[] = [];
   const seen = new Set<string>();
+
+  const structuredPositions = [...extractPersonnelTablePositions(lines), ...extractJobTitlePositions(lines)];
+  if (structuredPositions.length) {
+    const byTitle = new Map<string, any>();
+    structuredPositions.forEach((position) => {
+      const key = positionKey(position.position_title);
+      const current = byTitle.get(key) || {};
+      byTitle.set(key, {
+        ...current,
+        ...position,
+        position_title: current.position_title || position.position_title,
+        quantity: current.quantity || position.quantity || 1,
+        minimum_education: current.minimum_education || position.minimum_education || "",
+        minimum_years_experience: current.minimum_years_experience || position.minimum_years_experience,
+        general_experience: current.general_experience || position.general_experience || "",
+        specific_experience: current.specific_experience || position.specific_experience || "",
+        role_description: current.role_description || position.role_description || "",
+        required_keywords: Array.from(new Set([...(current.required_keywords || []), ...(position.required_keywords || [])])),
+        nationality_preference: current.nationality_preference || position.nationality_preference || "",
+      });
+    });
+    const recovered = Array.from(byTitle.values());
+    return {
+      positions: recovered,
+      sourceEvidence: recovered.map((position, index) => ({
+        field: "tender.positions",
+        value: position.position_title,
+        lineNumber: index + 1,
+        line: position.position_title,
+      })),
+    };
+  }
 
   lines.forEach((line, index) => {
     const compact = line.text;
@@ -364,7 +485,7 @@ export function extractUniversalTenderFacts(rawText: string): UniversalTenderFac
       compact;
     const title = normalizePositionTitle(titleFromDelimited);
     if (!isLikelyTenderPosition(title)) return;
-    const key = title.toLowerCase();
+    const key = positionKey(title);
     if (seen.has(key)) return;
     seen.add(key);
 
