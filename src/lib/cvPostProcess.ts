@@ -1,3 +1,5 @@
+import { extractUniversalCVFacts, mergeSourceEvidence } from "./universalExtraction";
+
 function clean(value: any) {
   return String(value || "").replace(/\s+/g, " ").trim();
 }
@@ -540,9 +542,21 @@ export function strengthenAdequacyFromEmployment(expert: any) {
 
 export function postProcessExtractedExpert(expert: any, rawText: string) {
   let next = { ...expert };
+  const universalFacts = extractUniversalCVFacts(rawText);
+
+  if (!next.email && universalFacts.contacts.emails[0]) {
+    next.email = universalFacts.contacts.emails[0];
+  }
+  if (!next.phone && universalFacts.contacts.phones[0]) {
+    next.phone = universalFacts.contacts.phones[0];
+  }
+  if ((!next.software || !next.software.length) && universalFacts.software.length) {
+    next.software = universalFacts.software;
+  }
+
   const existingEducation = next.education || next.metadata?.educations || [];
   if (!hasMeaningfulEducation(existingEducation)) {
-    const recoveredEducation = recoverEducationFromText(rawText);
+    const recoveredEducation = universalFacts.education.length ? universalFacts.education : recoverEducationFromText(rawText);
     if (recoveredEducation.length) {
       next = {
         ...next,
@@ -563,6 +577,32 @@ export function postProcessExtractedExpert(expert: any, rawText: string) {
   next = recoverEmploymentRecordsFromText(next, rawText);
   next = recoverEmploymentActivitiesFromText(next, rawText);
   next = recoverLanguagesFromText(next, rawText);
+  if (universalFacts.languages.length) {
+    next = recoverLanguagesFromText(
+      {
+        ...next,
+        metadata: {
+          ...(next.metadata || {}),
+          languages: next.metadata?.languages?.length ? next.metadata.languages : universalFacts.languages,
+        },
+      },
+      rawText,
+    );
+  }
+  next = {
+    ...next,
+    metadata: {
+      ...(next.metadata || {}),
+      source_evidence: mergeSourceEvidence(next.metadata?.source_evidence, universalFacts.sourceEvidence),
+      universal_extraction_summary: {
+        emails: universalFacts.contacts.emails.length,
+        phones: universalFacts.contacts.phones.length,
+        languages: universalFacts.languages.length,
+        education: universalFacts.education.length,
+        software: universalFacts.software.length,
+      },
+    },
+  };
 
   return strengthenAdequacyFromEmployment(next);
 }

@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type, Schema } from '@google/genai';
 import { ALL_PRIMARY_POSITIONS } from '../lib/constants.ts';
+import { extractUniversalTenderFacts, mergeSourceEvidence } from '../lib/universalExtraction.ts';
 
 function getAI() {
   const rawKey = process.env.GEMINI_API_KEY || "";
@@ -529,6 +530,8 @@ function normalizePositionTitle(value: string) {
     .replace(/\b(no\.?|number|qty|quantity|personnel|staff|expert|key expert|position|role)\b\s*:?\s*/gi, "")
     .replace(/\s*\(\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*\)\s*$/i, "")
     .replace(/\s*[-–—:]\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*$/i, "")
+    .replace(/\s+(?:qty|quantity|no\.?|number)\s*[:\-]?\s*\d{1,2}\s*$/i, "")
+    .replace(/\s+\d{1,2}\s*$/i, "")
     .replace(/[.;:,]\s*$/, "")
     .trim();
 }
@@ -595,7 +598,8 @@ function recoverTenderPositionsFromText(text: string) {
 function postProcessTenderExtraction(parsed: any, rawText: string) {
   const tender = { ...(parsed || {}) };
   const existing = Array.isArray(tender.positions) ? tender.positions : [];
-  const recovered = recoverTenderPositionsFromText(rawText);
+  const universalFacts = extractUniversalTenderFacts(rawText);
+  const recovered = universalFacts.positions.length ? universalFacts.positions : recoverTenderPositionsFromText(rawText);
   const byTitle = new Map<string, any>();
 
   [...existing, ...recovered].forEach((position) => {
@@ -629,6 +633,7 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
       ...(tender.extraction_recovery || {}),
       tenderPositionsRecoveredFromText: recovered.map((position) => position.position_title),
     },
+    source_evidence: mergeSourceEvidence(tender.source_evidence, universalFacts.sourceEvidence),
   };
 }
 
