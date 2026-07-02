@@ -52,16 +52,30 @@ function normalizeLanguageObjects(value: any) {
 
 function formatEducation(value: any) {
   if (typeof value === "string") return clean(value);
-  return clean([
+  const degreeText = clean(
     value?.degree && value?.field && !String(value.degree).toLowerCase().includes(String(value.field).toLowerCase())
       ? `${value.degree} in ${value.field}`
       : value?.degree || value?.field,
+  );
+  const yearText = clean(value?.year);
+  return clean([
+    degreeText,
     value?.institution,
     value?.location,
-    value?.year,
+    yearText && !degreeText.toLowerCase().includes(yearText.toLowerCase()) ? yearText : "",
     value?.grade,
     value?.notes && !clean(value?.degree).includes(clean(value?.notes)) ? value.notes : "",
   ].filter(Boolean).join(", "));
+}
+
+function isFormalEducationDetail(value: any) {
+  const text = formatEducation(value).toLowerCase();
+  if (!text) return false;
+  if (/\b(training|course|workshop|seminar|webinar|erasmus|exchange|qualification to practice|license|licence|certification training)\b/.test(text)) {
+    return /\b(ph\.?d|doctorate|doctoral|masters?|master of|m\.?sc|m\.?eng|meng|bachelors?|bachelor of|b\.?sc|b\.?eng|beng|diploma|dae|degree)\b/.test(text) &&
+      !/\b(training|course|workshop|seminar|webinar|erasmus|exchange|qualification to practice)\b/.test(text);
+  }
+  return /\b(ph\.?d|doctorate|doctoral|masters?|master of|m\.?sc|m\.?eng|meng|bachelors?|bachelor of|b\.?sc|b\.?eng|beng|diploma|dae|degree)\b/.test(text);
 }
 
 function normalizeEducationObjects(value: any) {
@@ -86,8 +100,8 @@ function normalizeEducationObjects(value: any) {
       const text = formatEducation(item);
       if (wordCount(text) < 2) return false;
       if (/^to practice as\b/i.test(text)) return false;
-      if (/to practice as/i.test(item.degree) && !/\b(architect|engineer|engineering|architecture|bachelor|master|diploma|ph\.?d|degree)\b/i.test(item.degree)) return false;
-      return true;
+      if (/to practice as/i.test(item.degree)) return false;
+      return isFormalEducationDetail(item);
     });
 
   const seen = new Set<string>();

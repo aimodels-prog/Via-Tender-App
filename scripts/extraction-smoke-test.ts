@@ -23,7 +23,13 @@ async function main() {
     }, text);
     console.log("Silvia language facts:", facts.languages);
     console.log("Silvia post-processed languages:", expert.languages);
+    console.log("Silvia education details:", expert.education);
     if (facts.languages.length < 5) throw new Error("Expected Silvia CV language recovery to find at least 5 languages.");
+    if (expert.educationLevel !== "Master Degree") throw new Error(`Expected Silvia education level to be Master Degree, got ${expert.educationLevel}.`);
+    if (expert.metadata?.educations?.length !== 2) throw new Error(`Expected Silvia CV to have exactly 2 formal education details, got ${expert.metadata?.educations?.length}.`);
+    if (/training|course|erasmus|qualification to practice/i.test(JSON.stringify(expert.metadata?.educations || []))) {
+      throw new Error("Silvia formal education details are contaminated with training/course/exchange/license entries.");
+    }
     const aiTrainer = expert.experiences?.find((item: any) => item.role === "AI Trainer");
     if (!aiTrainer?.description?.includes("Copilot")) throw new Error("Expected AI Trainer duties to be recovered from Silvia CV.");
     if (/AI Advisor with strategic/i.test(aiTrainer.description)) throw new Error("AI Trainer duties are contaminated with AI Advisor responsibilities.");

@@ -211,7 +211,7 @@ function parseEducation(sections: TextSection[], allLines: TextLine[]) {
   const lines = sourceSections.length ? sourceSections.flatMap((section) => section.lines.map((line) => ({ ...line, section: section.heading }))) : allLines.map((line) => ({ ...line, section: undefined }));
   const education: UniversalCVFacts["education"] = [];
   const sourceEvidence: SourceEvidence[] = [];
-  const eduPattern = /\b(Ph\.?D\.?|Doctor(?:ate)?|DAE|Diploma|Bachelor'?s?|B\.?Sc\.?|Master'?s?|M\.?Sc\.?|M\.?Eng|MEng|Degree|Qualification to practice|Erasmus|Training in Artificial Intelligence)\b(?:\s+(?:of|in)\s+|\s+)?([^,\n;]{0,120})?/i;
+  const eduPattern = /\b(Ph\.?D\.?|Doctor(?:ate)?|DAE|Diploma|Bachelor'?s?|B\.?Sc\.?|Master'?s?|M\.?Sc\.?|M\.?Eng|MEng|Degree)\b(?:\s+(?:of|in)\s+|\s+)?([^,\n;]{0,120})?/i;
   const stopPattern = /\b(work experience|professional experience|employment|languages?|skills?|software|signature|certifications?|publications?)\b/i;
 
   for (const line of lines) {
