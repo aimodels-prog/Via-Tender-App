@@ -1,16 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Filter, Trash2, Edit, ChevronDown, ChevronUp, ArrowUpAZ, ArrowDownZA } from 'lucide-react';
+import { Search, Filter, Trash2, Edit, ChevronDown, ChevronUp, ArrowUpAZ, ArrowDownZA, UserPlus, AlertCircle } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import ConfirmModal from '../components/ConfirmModal';
 import PromptModal from '../components/PromptModal';
+import { useAuth } from '../lib/auth';
 
 export default function Users() {
+  const { currentUser } = useAuth();
   const [users, setUsers] = useState<any[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
 
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [editUser, setEditUser] = useState<any | null>(null);
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [formError, setFormError] = useState("");
   const [lookups, setLookups] = useState<any>({ roles: ['User', 'Admin'], userStatuses: ['Active', 'Inactive'] });
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
   const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
@@ -20,6 +24,59 @@ export default function Users() {
   const fetchUsers = async () => {
     const data = await api.getUsers();
     setUsers(data);
+  };
+
+  const handleCreateUser = async (values: Record<string, string>) => {
+    setFormError("");
+    const name = values.name?.trim();
+    const email = values.email?.trim().toLowerCase();
+    const password = values.password || "";
+    if (!name || !email || !password) {
+      setFormError("Full name, email, and temporary password are required.");
+      return;
+    }
+    if (password.length < 6) {
+      setFormError("Temporary password must be at least 6 characters.");
+      return;
+    }
+    const result = await api.addUser({
+      name,
+      email,
+      password,
+      role: values.role === 'Admin' ? 'Admin' : 'User',
+      status: values.status === 'Inactive' ? 'Inactive' : 'Active',
+    });
+    if (!result?.success) {
+      setFormError(result?.error || "Unable to create user.");
+      return;
+    }
+    setIsCreateOpen(false);
+    fetchUsers();
+  };
+
+  const handleUpdateUser = async (values: Record<string, string>) => {
+    setFormError("");
+    if (!editUser) return;
+    const name = values.name?.trim();
+    const email = values.email?.trim().toLowerCase();
+    if (!name || !email) {
+      setFormError("Full name and email are required.");
+      return;
+    }
+    const updates: any = {
+      name,
+      email,
+      role: values.role === 'Admin' ? 'Admin' : 'User',
+      status: values.status === 'Inactive' ? 'Inactive' : 'Active',
+    };
+    if (values.password) updates.password = values.password;
+    const result = await api.updateUser(editUser.id, updates);
+    if (!result?.success) {
+      setFormError(result?.error || "Unable to update user.");
+      return;
+    }
+    setEditUser(null);
+    fetchUsers();
   };
 
   useEffect(() => {
@@ -174,7 +231,24 @@ export default function Users() {
           <h2 className="text-[22px] font-semibold text-slate-900 mb-1">User Management</h2>
           <p className="text-slate-500 text-sm">Manage user roles and account access</p>
         </div>
+        <button
+          onClick={() => {
+            setFormError("");
+            setIsCreateOpen(true);
+          }}
+          className="flex items-center justify-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-colors shadow-sm w-full sm:w-auto"
+        >
+          <UserPlus size={16} />
+          Add User
+        </button>
       </div>
+
+      {formError && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+          <AlertCircle size={16} className="mt-0.5 shrink-0" />
+          <span>{formError}</span>
+        </div>
+      )}
 
       <div className="flex flex-col sm:flex-row items-center gap-4">
         <div className="relative flex-1 w-full">
@@ -238,10 +312,22 @@ export default function Users() {
                     </td>
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-2">
-                        <button onClick={() => setEditUser(user)} className="p-1.5 text-slate-400 hover:text-blue-600 transition-colors" title="Edit User">
+                        <button
+                          onClick={() => {
+                            setFormError("");
+                            setEditUser(user);
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-blue-600 transition-colors"
+                          title="Edit User"
+                        >
                           <Edit size={16} />
                         </button>
-                        <button onClick={() => setConfirmDeleteId(user.id)} className="p-1.5 text-slate-400 hover:text-red-600 transition-colors" title="Remove User">
+                        <button
+                          onClick={() => setConfirmDeleteId(user.id)}
+                          disabled={String(currentUser?.id) === String(user.id)}
+                          className="p-1.5 text-slate-400 hover:text-red-600 transition-colors disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-slate-400"
+                          title={String(currentUser?.id) === String(user.id) ? "You cannot remove your own account" : "Remove User"}
+                        >
                           <Trash2 size={16} />
                         </button>
                       </div>
@@ -268,7 +354,11 @@ export default function Users() {
         isDestructive={true}
         onConfirm={async () => {
           if (confirmDeleteId) {
-            await api.deleteUser(confirmDeleteId);
+            try {
+              await api.deleteUser(confirmDeleteId);
+            } catch (error: any) {
+              setFormError(error.message || "Unable to delete user.");
+            }
             setConfirmDeleteId(null);
             fetchUsers();
           }
@@ -277,27 +367,39 @@ export default function Users() {
       />
 
       <PromptModal
+        isOpen={isCreateOpen}
+        title="Add User"
+        fields={[
+          { name: 'name', label: 'Full Name' },
+          { name: 'email', label: 'Email Address' },
+          { name: 'password', label: 'Temporary Password', type: 'password' },
+          { name: 'role', label: 'Role', defaultValue: 'User', options: lookups.roles },
+          { name: 'status', label: 'Status', defaultValue: 'Active', options: lookups.userStatuses }
+        ]}
+        confirmText="Create User"
+        onConfirm={handleCreateUser}
+        onCancel={() => {
+          setIsCreateOpen(false);
+          setFormError("");
+        }}
+      />
+
+      <PromptModal
         isOpen={!!editUser}
         title="Edit User"
         fields={[
           { name: 'name', label: 'Full Name', defaultValue: editUser?.name },
+          { name: 'email', label: 'Email Address', defaultValue: editUser?.email },
+          { name: 'password', label: 'New Password (optional)', type: 'password' },
           { name: 'role', label: 'Role', defaultValue: editUser?.role === 'Admin' ? 'Admin' : 'User', options: lookups.roles },
           { name: 'status', label: 'Status', defaultValue: editUser?.status || 'Active', options: lookups.userStatuses }
         ]}
         confirmText="Save Changes"
-        onConfirm={async (values) => {
-          if (editUser && values.name && values.role && values.status) {
-            await api.updateUser(editUser.id, {
-              ...editUser,
-              name: values.name,
-              role: values.role === 'Admin' ? 'Admin' : 'User',
-              status: values.status === 'Inactive' ? 'Inactive' : 'Active',
-            });
-            setEditUser(null);
-            fetchUsers();
-          }
+        onConfirm={handleUpdateUser}
+        onCancel={() => {
+          setEditUser(null);
+          setFormError("");
         }}
-        onCancel={() => setEditUser(null)}
       />
     </div>
   );

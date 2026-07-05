@@ -343,6 +343,11 @@ async function startServer() {
     const nextName = String(req.body.name ?? existing.name).trim();
     const nextEmail = String(req.body.email ?? existing.email).trim().toLowerCase();
     if (!isAllowedEmail(nextEmail)) return res.status(400).json({ error: domainError() });
+    if (!nextName || !nextEmail) return res.status(400).json({ error: "Name and email are required." });
+    if (nextEmail !== String(existing.email || "").toLowerCase()) {
+      const duplicate = await query(`select id from users where lower(email) = lower($1) and id <> $2`, [nextEmail, req.params.id]);
+      if (duplicate.rowCount) return res.status(409).json({ error: "A user with this email already exists." });
+    }
     const nextRole = req.user?.role === "Admin" && req.body.role === "Admin" ? "Admin" : req.user?.role === "Admin" ? req.body.role || existing.role : existing.role;
     const nextStatus = req.user?.role === "Admin" ? (req.body.status === "Inactive" ? "Inactive" : req.body.status === "Active" ? "Active" : existing.status) : existing.status;
     const passwordHash = req.body.password ? await bcrypt.hash(String(req.body.password), 12) : existing.password_hash;
@@ -358,6 +363,9 @@ async function startServer() {
   });
 
   app.delete("/api/users/:id", requireAuth, requireAdmin, async (req, res) => {
+    if (String(req.user?.id) === String(req.params.id)) {
+      return res.status(400).json({ error: "You cannot delete your own signed-in admin account." });
+    }
     await query(`delete from users where id = $1`, [req.params.id]);
     await writeLog("User Deleted", "Deleted user record");
     res.json({ success: true });
