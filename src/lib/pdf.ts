@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import { type DocumentBranding, resolveDocumentBranding } from "./branding";
 
 // Re-declaring for TypeScript support in this file
 declare module "jspdf" {
@@ -10,23 +11,9 @@ declare module "jspdf" {
 
 export interface PDFExportOptions {
   template: "General" | "Specialized";
-  branding?: {
-    ministry: string;
-    department: string;
-    tender_no: string;
-    header_base64?: string;
-    footer_base64?: string;
-  };
+  branding?: DocumentBranding;
   expert: any;
   position_title: string;
-}
-
-function resolveBranding(branding: PDFExportOptions["branding"]) {
-  return {
-    ...(branding || {}),
-    header_base64: branding?.header_base64 || "",
-    footer_base64: branding?.footer_base64 || "",
-  };
 }
 
 function getPdfImageType(dataUrl: string): "PNG" | "JPEG" | "GIF" | "BMP" {
@@ -39,10 +26,14 @@ function getPdfImageType(dataUrl: string): "PNG" | "JPEG" | "GIF" | "BMP" {
 
 export async function generateReformatedCV(options: PDFExportOptions) {
   const doc = new jsPDF();
+  const resolvedOptions = {
+    ...options,
+    branding: await resolveDocumentBranding(options.branding),
+  };
   if (options.template === "Specialized") {
-    return generateSpecialized(doc, options);
+    return generateSpecialized(doc, resolvedOptions);
   }
-  return generateDoc(doc, options);
+  return generateDoc(doc, resolvedOptions);
 }
 
 function safeSplitText(doc: any, text: string, maxWidth: number): string[] {
@@ -99,7 +90,7 @@ function generateK9(doc: jsPDF, options: PDFExportOptions) {
 
 function generateDoc(doc: any, options: PDFExportOptions) {
   const { expert, position_title, template } = options;
-  const branding = resolveBranding(options.branding);
+  const branding = options.branding || {};
   const isK9 = template === "General";
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -561,7 +552,7 @@ function generateDoc(doc: any, options: PDFExportOptions) {
 
 function generateSpecialized(doc: any, options: PDFExportOptions) {
   const { expert, position_title } = options;
-  const branding = resolveBranding(options.branding);
+  const branding = options.branding || {};
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const startX = 20;

@@ -14,15 +14,8 @@ import {
   ImageRun,
 } from "docx";
 import { saveAs } from "file-saver";
-import { PDFExportOptions } from "./pdf";
-
-function resolveBranding(branding: PDFExportOptions["branding"]) {
-  return {
-    ...(branding || {}),
-    header_base64: branding?.header_base64 || "",
-    footer_base64: branding?.footer_base64 || "",
-  };
-}
+import type { PDFExportOptions } from "./pdf";
+import { resolveDocumentBranding } from "./branding";
 
 function dataUrlToUint8Array(dataUrl: string) {
   const base64 = dataUrl.split(",")[1] || "";
@@ -44,7 +37,7 @@ function getDocxImageType(dataUrl: string): "jpg" | "png" | "gif" | "bmp" {
 
 export async function generateDocxCV(options: PDFExportOptions) {
   const { expert, position_title, template } = options;
-  const branding = resolveBranding(options.branding);
+  const branding = await resolveDocumentBranding(options.branding);
 
   const isGeneral = template === "General";
   const cleanText = (value: any) =>

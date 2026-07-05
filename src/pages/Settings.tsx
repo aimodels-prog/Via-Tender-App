@@ -223,6 +223,7 @@ export default function Settings() {
   const handleSaveBranding = async () => {
     if (!isAdmin) return;
     await api.saveGlobalBranding(globalBranding);
+    window.dispatchEvent(new Event('settingsUpdated'));
     setIsSaved(true);
     setTimeout(() => setIsSaved(false), 3000);
   };
