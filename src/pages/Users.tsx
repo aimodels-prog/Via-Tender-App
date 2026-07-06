@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, Filter, Trash2, Edit, ChevronDown, ChevronUp, ArrowUpAZ, ArrowDownZA, UserPlus, AlertCircle } from 'lucide-react';
+import { Search, Filter, Trash2, Edit, ChevronDown, ChevronUp, ArrowUpAZ, ArrowDownZA, UserPlus, AlertCircle, CheckCircle2, Copy, X } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import ConfirmModal from '../components/ConfirmModal';
@@ -14,6 +14,8 @@ export default function Users() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [editUser, setEditUser] = useState<any | null>(null);
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [createdCredentials, setCreatedCredentials] = useState<any | null>(null);
+  const [credentialsCopied, setCredentialsCopied] = useState(false);
   const [formError, setFormError] = useState("");
   const [lookups, setLookups] = useState<any>({ roles: ['User', 'Admin'], userStatuses: ['Active', 'Inactive'] });
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
@@ -50,8 +52,36 @@ export default function Users() {
       setFormError(result?.error || "Unable to create user.");
       return;
     }
+    setCreatedCredentials({
+      name,
+      email,
+      password,
+      role: values.role === 'Admin' ? 'Admin' : 'User',
+      status: values.status === 'Inactive' ? 'Inactive' : 'Active',
+    });
+    setCredentialsCopied(false);
     setIsCreateOpen(false);
     fetchUsers();
+  };
+
+  const copyCreatedCredentials = async () => {
+    if (!createdCredentials) return;
+    const text = [
+      `Name: ${createdCredentials.name}`,
+      `Email: ${createdCredentials.email}`,
+      `Temporary password: ${createdCredentials.password}`,
+      `Role: ${createdCredentials.role}`,
+      `Status: ${createdCredentials.status}`,
+      '',
+      'Please sign in and change your password after first login.',
+    ].join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setCredentialsCopied(true);
+      setTimeout(() => setCredentialsCopied(false), 2000);
+    } catch {
+      setFormError("Unable to copy credentials. You can manually copy them from the modal.");
+    }
   };
 
   const handleUpdateUser = async (values: Record<string, string>) => {
@@ -401,6 +431,62 @@ export default function Users() {
           setFormError("");
         }}
       />
+
+      {createdCredentials && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-slate-900/50 backdrop-blur-sm" onClick={() => setCreatedCredentials(null)} />
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-lg overflow-hidden animate-in">
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                  <CheckCircle2 size={20} />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-slate-900">User Created</h3>
+                  <p className="text-sm text-slate-500">Share these temporary login details with the user.</p>
+                </div>
+              </div>
+              <button onClick={() => setCreatedCredentials(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-800">
+                This password is shown only now. After closing this window, it will not be visible again.
+              </div>
+              <div className="rounded-lg border border-slate-200 overflow-hidden">
+                {[
+                  ['Name', createdCredentials.name],
+                  ['Email / Username', createdCredentials.email],
+                  ['Temporary Password', createdCredentials.password],
+                  ['Role', createdCredentials.role],
+                  ['Status', createdCredentials.status],
+                ].map(([label, value]) => (
+                  <div key={label} className="grid grid-cols-3 gap-3 border-b border-slate-100 last:border-b-0 px-4 py-3">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span>
+                    <span className="col-span-2 text-sm font-medium text-slate-900 break-all">{value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="p-5 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
+              <button
+                onClick={copyCreatedCredentials}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 transition-colors flex items-center gap-2"
+              >
+                {credentialsCopied ? <CheckCircle2 size={16} /> : <Copy size={16} />}
+                {credentialsCopied ? 'Copied' : 'Copy Details'}
+              </button>
+              <button
+                onClick={() => setCreatedCredentials(null)}
+                className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
