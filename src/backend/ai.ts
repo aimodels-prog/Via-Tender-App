@@ -647,6 +647,7 @@ function cleanTenderLine(value: any) {
 
 function normalizePositionTitle(value: string) {
   return cleanTenderLine(value)
+    .replace(/[✓✔]/g, " ")
     .replace(/^[\d.)\-\s]+/, "")
     .replace(/^(?:no\.?|number|qty|personnel|staff|key expert|expert|position|role|designation)\s*:?\s*/i, "")
     .replace(/\s*\(\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*\)\s*$/i, "")
@@ -657,11 +658,25 @@ function normalizePositionTitle(value: string) {
     .trim();
 }
 
+function isTenderFormOrEvaluationPosition(value: string) {
+  const text = cleanTenderLine(value);
+  return (
+    /\bTECH-\d+[A-Z]?\b/i.test(text) ||
+    /\bconsultant'?s\s+(organization|experience|comments?|suggestions?|methodology|work plan|team composition)\b/i.test(text) ||
+    /\b(?:form|schedule)\s+tech[-\s]?\d/i.test(text) ||
+    /\b(?:technical|financial)\s+proposal\b/i.test(text) ||
+    /\bexperience\.\s*[✓✔]/i.test(text) ||
+    /^[A-Z]\.\s+Consultant'?s\b/i.test(text)
+  );
+}
+
 function isLikelyStaffRoleTitle(value: string) {
   const title = normalizePositionTitle(value);
   if (!title || title.length < 4 || title.length > 90) return false;
+  if (isTenderFormOrEvaluationPosition(value) || isTenderFormOrEvaluationPosition(title)) return false;
   if (!/^[A-Z]/.test(title)) return false;
-  if (/^(scope|background|objective|deliverables|submission|evaluation|financial|technical|appendix|annex|table|minimum|general|specific|description)$/i.test(title)) return false;
+  if (/^(scope|background|objective|deliverables|submission|evaluation|financial|technical|appendix|annex|table|minimum|general|specific|description|experience|organization|methodology|work plan)$/i.test(title)) return false;
+  if (/\b(experience|organization|methodology|approach|comments?|suggestions?|data sheet|instruction|proposal|evaluation|criterion|criteria)\b/i.test(title) && !/\b(engineer|expert|specialist|manager|surveyor|inspector|planner|architect|advisor|coordinator|controller|officer|team leader|resident engineer)\b/i.test(title)) return false;
   if (/^(consultant engineer|consulting engineer)$/i.test(title)) return false;
   return /\b(manager|engineer|expert|specialist|consultant|leader|director|coordinator|surveyor|inspector|architect|designer|planner|scheduler|advisor|trainer|analyst|officer|supervisor|controller|technician|draftsman|economist|sociologist|environmentalist|hydrologist|geologist|qa\/qc|hse|team leader|project manager|resident engineer)\b/i.test(title);
 }
@@ -973,6 +988,7 @@ export async function runParseTenderText(text: string): Promise<any> {
   const chunks = prepareTenderPromptChunks(text);
   let parsed: any;
   if (chunks.length > 1) {
+    const longTenderModels = ["gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3.5-flash"];
     const chunkResults = await Promise.allSettled(
       chunks.map((chunk, index) =>
         parseTenderWithPrompt(
@@ -980,14 +996,14 @@ export async function runParseTenderText(text: string): Promise<any> {
             chunk,
             `This is extraction chunk ${index + 1} of ${chunks.length}. Extract every tender fact visible in this chunk. Another pass will merge all chunks, so do not omit positions just because surrounding pages may exist elsewhere.`,
           ),
-          ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview"],
+          longTenderModels,
         ),
       ),
     );
     const fulfilled = chunkResults
       .filter((result): result is PromiseFulfilledResult<any> => result.status === "fulfilled")
       .map((result) => result.value);
-    parsed = fulfilled.length ? mergeTenderExtractions(fulfilled) : await parseTenderWithPrompt(prompt, ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"]);
+    parsed = fulfilled.length ? mergeTenderExtractions(fulfilled) : await parseTenderWithPrompt(prompt, longTenderModels);
   } else {
     parsed = await parseTenderWithPrompt(prompt, ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"]);
   }

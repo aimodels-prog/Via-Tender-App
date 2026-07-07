@@ -332,6 +332,7 @@ export function extractUniversalCVFacts(rawText: string): UniversalCVFacts {
 
 function normalizePositionTitle(value: string) {
   return clean(value)
+    .replace(/[✓✔]/g, " ")
     .replace(/^[\d.)\-\s]+/, "")
     .replace(/^job\s+title\s*/i, "")
     .replace(/^requirements in construction phase\s+/i, "")
@@ -343,6 +344,18 @@ function normalizePositionTitle(value: string) {
     .replace(/\s+\d{1,2}\s*$/i, "")
     .replace(/[.;:,]\s*$/, "")
     .trim();
+}
+
+function isTenderFormOrEvaluationText(value: string) {
+  const text = clean(value);
+  return (
+    /\bTECH-\d+[A-Z]?\b/i.test(text) ||
+    /\bconsultant'?s\s+(organization|experience|comments?|suggestions?|methodology|work plan|team composition)\b/i.test(text) ||
+    /\b(?:form|schedule)\s+tech[-\s]?\d/i.test(text) ||
+    /\b(?:technical|financial)\s+proposal\b/i.test(text) ||
+    /\bexperience\.\s*[✓✔]/i.test(text) ||
+    /^[A-Z]\.\s+Consultant'?s\b/i.test(text)
+  );
 }
 
 function positionKey(value: string) {
@@ -358,8 +371,10 @@ function positionKey(value: string) {
 function isLikelyTenderPosition(value: string) {
   const title = normalizePositionTitle(value);
   if (!title || title.length < 4 || title.length > 90) return false;
+  if (isTenderFormOrEvaluationText(value) || isTenderFormOrEvaluationText(title)) return false;
   if (!/^[A-Z]/.test(title)) return false;
-  if (/^(scope|background|objective|deliverables|submission|evaluation|financial|technical|appendix|annex|table|minimum|general|specific|description)$/i.test(title)) return false;
+  if (/^(scope|background|objective|deliverables|submission|evaluation|financial|technical|appendix|annex|table|minimum|general|specific|description|experience|organization|methodology|work plan)$/i.test(title)) return false;
+  if (/\b(experience|organization|methodology|approach|comments?|suggestions?|data sheet|instruction|proposal|evaluation|criterion|criteria)\b/i.test(title) && !/\b(engineer|expert|specialist|manager|surveyor|inspector|planner|architect|advisor|coordinator|controller|officer|team leader|resident engineer)\b/i.test(title)) return false;
   if (/^(consultant engineer|consulting engineer)$/i.test(title)) return false;
   return /\b(manager|engineer|expert|specialist|consultant|leader|director|coordinator|surveyor|inspector|architect|designer|planner|scheduler|advisor|trainer|analyst|officer|supervisor|controller|technician|draftsman|economist|sociologist|environmentalist|hydrologist|geologist|qa\/qc|hse|team leader|project manager|resident engineer)\b/i.test(title);
 }
@@ -374,14 +389,18 @@ function extractQuantity(line: string) {
 }
 
 function buildTenderPositionFromBlock(title: string, line: string, nearby: string, source: string) {
+  const reqText = clean(nearby);
+  const firstExperienceSentence = clean(reqText.match(/\b(?:shall have|must have|minimum|min\.?|at least|required)\s+[^.]{0,220}?\bexperience\b[^.]{0,260}(?:\.|$)/i)?.[0] || "");
+  const firstResponsibilitySentence = clean(reqText.match(/\b(?:shall|will|must|responsible for|responsibilities include|duties include|tasks include|to\s+(?:manage|lead|prepare|review|supervise|coordinate|undertake|conduct|ensure|assist))\b[^.]{20,500}(?:\.|$)/i)?.[0] || "");
+  const qualificationSentence = clean(reqText.match(/\b(?:qualification|minimum education|academic qualification|education)\s*[:\-]?\s*(.+?)(?=\b(?:general experience|specific experience|experience|role|responsibil|duties|tasks|skills?|location|position|job title)\b|$)/i)?.[1] || "");
   return {
     position_title: title,
     quantity: extractQuantity(line),
-    minimum_education: clean(nearby.match(/\b(?:minimum\s+)?(?:education|qualification|academic qualification)\s*[:\-]?\s*(.+?)(?=\b(?:experience|general experience|specific experience|role|responsibil|duties|tasks|requirement|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
-    minimum_years_experience: Number(nearby.match(/\b(?:minimum|min\.?|at least)\s+(\d{1,2})\+?\s+years?\b/i)?.[1] || nearby.match(/\b(\d{1,2})\+?\s+years?\s+(?:of\s+)?(?:relevant|professional|general|specific)?\s*experience\b/i)?.[1] || 0) || undefined,
-    general_experience: clean(nearby.match(/\bgeneral experience\s*[:\-]?\s*(.+?)(?=\bspecific experience\b|\b(?:role|responsibil|duties|tasks|minimum|education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
-    specific_experience: clean(nearby.match(/\bspecific experience\s*[:\-]?\s*(.+?)(?=\b(?:role|responsibil|duties|tasks|minimum|education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
-    role_description: clean(nearby.match(/\b(?:role\s*&\s*responsibilities|role description|responsibilities|tasks|duties|scope of work)\s*[:\-]?\s*(.+?)(?=\b(?:general experience|specific experience|minimum|education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
+    minimum_education: qualificationSentence || clean(reqText.match(/\b(?:bachelor|master|phd|degree|diploma|qualification)[^.]{0,220}(?:\.|$)/i)?.[0] || ""),
+    minimum_years_experience: Number(reqText.match(/\b(?:minimum|min\.?|at least)\s+(\d{1,2})\+?\s+years?\b/i)?.[1] || reqText.match(/\b(\d{1,2})\+?\s+years?\s+(?:of\s+)?(?:relevant|professional|general|specific)?\s*experience\b/i)?.[1] || 0) || undefined,
+    general_experience: clean(reqText.match(/\bgeneral experience\s*[:\-]?\s*(.+?)(?=\bspecific experience\b|\b(?:role\s*&\s*responsibilities|role description|responsibilities|duties|tasks|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || "") || firstExperienceSentence,
+    specific_experience: clean(reqText.match(/\bspecific experience\s*[:\-]?\s*(.+?)(?=\b(?:role\s*&\s*responsibilities|role description|responsibilities|duties|tasks|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
+    role_description: clean(reqText.match(/\b(?:role\s*&\s*responsibilities|role description|responsibilities|tasks|duties|scope of work)\s*[:\-]?\s*(.+?)(?=\b(?:general experience|specific experience|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || "") || firstResponsibilitySentence,
     required_sector_experience: [],
     mandatory_skills: Array.from(new Set((nearby.match(/\b(?:FIDIC|AutoCAD|Primavera|BIM|GIS|QA\/QC|HSE|PMP|laboratory|asphalt|earthworks?|survey|quantity|document control|contract management|site supervision)\b/gi) || []).map((item) => item.trim()))),
     required_keywords: Array.from(new Set((nearby.match(/\b(?:roads?|bridges?|water|wastewater|buildings?|infrastructure|construction|supervision|design|drainage|pavement|utilities|geotechnical|materials?|laboratory|asphalt|earthworks?|survey|quantity|document control)\b/gi) || []).map((item) => item.trim()))),
@@ -389,6 +408,37 @@ function buildTenderPositionFromBlock(title: string, line: string, nearby: strin
     recovered_from_text: true,
     recovery_source: source,
   };
+}
+
+function enrichPositionsFromBlocks(basePositions: any[], lines: TextLine[]) {
+  return basePositions.map((position) => {
+    const title = normalizePositionTitle(position.position_title || "");
+    if (!title) return position;
+    const titleKey = positionKey(title);
+    const index = lines.findIndex((line) => {
+      const lineKey = positionKey(line.text);
+      return lineKey === titleKey || new RegExp(`\\b${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(line.text);
+    });
+    if (index < 0) return position;
+    const blockLines: string[] = [];
+    for (let i = index; i < Math.min(lines.length, index + 55); i++) {
+      const text = lines[i].text;
+      if (i > index && /\bJOB\s+TITLE\b/i.test(text)) break;
+      if (i > index + 4 && isLikelyTenderPosition(text) && /\b(?:qualification|experience|responsibil|duties|tasks)\b/i.test(blockLines.join(" "))) break;
+      blockLines.push(text);
+    }
+    const enriched = buildTenderPositionFromBlock(title, lines[index].text, blockLines.join(" "), "requirement_block_enrichment");
+    return {
+      ...position,
+      minimum_education: position.minimum_education || enriched.minimum_education,
+      minimum_years_experience: position.minimum_years_experience || enriched.minimum_years_experience,
+      general_experience: position.general_experience || enriched.general_experience,
+      specific_experience: position.specific_experience || enriched.specific_experience,
+      role_description: position.role_description || enriched.role_description,
+      mandatory_skills: Array.from(new Set([...(position.mandatory_skills || []), ...(enriched.mandatory_skills || [])])),
+      required_keywords: Array.from(new Set([...(position.required_keywords || []), ...(enriched.required_keywords || [])])),
+    };
+  });
 }
 
 function extractJobTitlePositions(lines: TextLine[]) {
@@ -475,6 +525,7 @@ function extractLooseRoleListPositions(lines: TextLine[]) {
     }
     const inRoleSection = index <= inRoleSectionUntil;
     const compact = line.text;
+    if (isTenderFormOrEvaluationText(compact)) return;
     const explicit = compact.match(explicitRolePattern)?.[1] || "";
     const wordCount = compact.split(/\s+/).length;
     const listLike = /^(?:\d{1,2}[.)]\s*|[-\u2022]\s*)/.test(compact) || /\b(?:qty|no\.?|number|nos?\.?|persons?|staff)\b/i.test(compact) || wordCount <= 7;
@@ -531,7 +582,7 @@ export function extractUniversalTenderFacts(rawText: string): UniversalTenderFac
         recovery_source: Array.from(new Set([current.recovery_source, position.recovery_source].filter(Boolean))).join(","),
       });
     });
-    const recovered = Array.from(byTitle.values());
+    const recovered = enrichPositionsFromBlocks(Array.from(byTitle.values()), lines);
     return {
       positions: recovered,
       sourceEvidence: recovered.map((position, index) => ({
@@ -545,6 +596,7 @@ export function extractUniversalTenderFacts(rawText: string): UniversalTenderFac
 
   lines.forEach((line, index) => {
     const compact = line.text;
+    if (isTenderFormOrEvaluationText(compact)) return;
     const titleFromDelimited =
       compact.match(/\b(?:position|role|staff|expert|key expert)\s*[:\-]\s*(.+)$/i)?.[1] ||
       compact.match(/^\s*\d{1,2}\s*[-.)]\s*(.+)$/)?.[1] ||

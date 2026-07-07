@@ -97,6 +97,31 @@ async function main() {
   const environmental = looseTenderFacts.positions.find((item) => item.position_title === "Environmental Safeguards Specialist");
   if (!environmental?.role_description?.includes("Review safeguards")) throw new Error("Expected loose tender recovery to capture role duties.");
 
+  const proposalFormNoiseText = `
+    Experience.   TECH-2A A. Consultant's Organization   TECH-2B B. Consultant's Experience
+    Required Positions
+    1. Feasibility Study Team Leader
+       Education Requirement: Master's degree in Transport Planning, Civil Engineering, Economics or related field.
+       Role Description: Lead the feasibility study, coordinate all experts, prepare methodology, and submit final reports.
+       General Experience: Minimum 15 years of professional experience in transport, infrastructure, and feasibility studies.
+       Specific Experience: At least 8 years as Team Leader on road or transport feasibility studies.
+    2. Road Engineer
+       Education Requirement: Bachelor's degree in Civil Engineering.
+       Role Description: Review road alignment, pavement options, quantities, and technical feasibility.
+       General Experience: Minimum 10 years of road engineering experience.
+       Specific Experience: Experience in road feasibility studies and preliminary design.
+  `;
+  const proposalFormFacts = extractUniversalTenderFacts(proposalFormNoiseText);
+  const proposalFormTitles = proposalFormFacts.positions.map((item) => item.position_title);
+  if (proposalFormTitles.some((title) => /TECH-2|Consultant's Organization|Consultant's Experience|Experience\./i.test(title))) {
+    throw new Error(`Proposal form headings were incorrectly extracted as positions: ${proposalFormTitles.join(", ")}`);
+  }
+  const teamLeader = proposalFormFacts.positions.find((item) => item.position_title === "Feasibility Study Team Leader");
+  if (!teamLeader?.minimum_education?.includes("Master")) throw new Error("Expected Team Leader education requirement to be recovered.");
+  if (!teamLeader?.role_description?.includes("Lead the feasibility study")) throw new Error("Expected Team Leader role description to be recovered.");
+  if (!teamLeader?.general_experience?.includes("15 years")) throw new Error("Expected Team Leader general experience to be recovered.");
+  if (!teamLeader?.specific_experience?.includes("8 years")) throw new Error("Expected Team Leader specific experience to be recovered.");
+
   const torPaths = [
     "C:/Users/Dell/Downloads/TOR 2024.OM.RFP.49_1.pdf",
     "C:/Users/Dell/Downloads/TOR 2024.OM.RFP.49_2.pdf",
