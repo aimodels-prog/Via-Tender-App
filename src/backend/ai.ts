@@ -90,10 +90,10 @@ const cvSchema: Schema = {
           skills: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Specific technical or soft skills (e.g., AutoCAD, Project Management)." },
           software: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Proficiency in specific software or digital tools." },
           training_courses: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Certifications, non-degree training, or short courses." },
-          dateOfBirth: { type: Type.STRING, description: "Format: YYYY-MM-DD or as found." },
-          countryOfCitizenship: { type: Type.STRING, description: "The nationality or citizenship of the expert." },
-          email: { type: Type.STRING, description: "The expert's email address if present." },
-          phone: { type: Type.STRING, description: "The expert's phone number if present." },
+          dateOfBirth: { type: Type.STRING, description: "Format: YYYY-MM-DD or as found. Output empty string if not present in CV." },
+          countryOfCitizenship: { type: Type.STRING, description: "The nationality or citizenship of the expert. Output empty string if not present in CV." },
+          email: { type: Type.STRING, description: "The expert's email address if present. Output empty string if not present in CV." },
+          phone: { type: Type.STRING, description: "The expert's phone number if present. Output empty string if not present in CV." },
           profileSummary: { type: Type.STRING, description: "CRITICAL: The ENTIRE professional bio or summary found in the CV (at least 7-10 lines, no bullet points)." },
           availability: { type: Type.STRING, description: "Availability status or notice period if stated." },
           professionalMembership: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Professional bodies or associations the expert is a member of." },
@@ -165,6 +165,8 @@ const cvSchema: Schema = {
     }
   }
 };
+
+const expertResponseSchema = (cvSchema.properties!.experts as any).items as Schema;
 
 const tenderSchema: Schema = {
   type: Type.OBJECT,
@@ -244,70 +246,160 @@ async function callGenAIWithRetry(
   throw lastError;
 }
 
+function sanitizeExtractedValues(obj: any): any {
+  if (typeof obj === "string") {
+    const trimmed = obj.trim();
+    if (/^(n\/?a|not\s*(stated|available|mentioned|provided|applicable|specified|found)|unknown|null|none|undefined|-)$/i.test(trimmed)) {
+      return "";
+    }
+    return trimmed
+      .replace(/^(Wait,?\s*|I will\s+|Let me\s+|I need to\s+|Looking at\s+|Based on\s+(?:my\s+)?(?:analysis|review)\s*,?\s*)/i, "")
+      .replace(/\b(?:Wait,\s+|I will\s+|Let me\s+|I need to\s+)[^.]+(?:\.\s*)?/gi, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+  if (Array.isArray(obj)) {
+    return obj.map(sanitizeExtractedValues).filter((value: any) => value !== "" && value !== null && value !== undefined);
+  }
+  if (obj && typeof obj === "object") {
+    const cleaned: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      cleaned[key] = sanitizeExtractedValues(value);
+    }
+    return cleaned;
+  }
+  return obj;
+}
+
+function validateExtractedExpert(expert: any): { valid: boolean; issues: string[] } {
+  const issues: string[] = [];
+  if (!String(expert?.fullName || expert?.name || "").trim()) issues.push("fullName is empty");
+  if (!Array.isArray(expert?.experiences) || expert.experiences.length === 0) issues.push("Zero experiences extracted");
+  if (!String(expert?.profileSummary || expert?.profile_summary || "").trim() || String(expert?.profileSummary || expert?.profile_summary || "").trim().length < 50) {
+    issues.push("profileSummary is missing or too short");
+  }
+  if ((!Array.isArray(expert?.metadata?.educations) || expert.metadata.educations.length === 0) && !String(expert?.educationLevel || "").trim()) {
+    issues.push("No education data found");
+  }
+  if (!Array.isArray(expert?.adequacy_experience) || expert.adequacy_experience.length === 0) issues.push("Zero adequacy entries");
+  if (!Array.isArray(expert?.metadata?.languages) && (!Array.isArray(expert?.languages) || expert.languages.length === 0)) issues.push("No languages found");
+  return { valid: issues.length === 0, issues };
+}
+
+function validateExtractedTender(tender: any): { valid: boolean; issues: string[] } {
+  const issues: string[] = [];
+  if (!String(tender?.tender_title || tender?.name || "").trim()) issues.push("tender_title is empty");
+  if (!String(tender?.client || "").trim()) issues.push("client is empty");
+  if (!Array.isArray(tender?.positions) || tender.positions.length === 0) issues.push("Zero positions extracted");
+  tender?.positions?.forEach((position: any, index: number) => {
+    if (!String(position?.position_title || "").trim()) issues.push(`Position ${index + 1}: missing title`);
+    if (!String(position?.general_experience || "").trim() && !String(position?.specific_experience || "").trim()) {
+      issues.push(`Position ${index + 1} "${position?.position_title || "Untitled"}": no experience requirements`);
+    }
+    if (!String(position?.role_description || "").trim()) {
+      issues.push(`Position ${index + 1} "${position?.position_title || "Untitled"}": no role_description`);
+    }
+  });
+  return { valid: issues.length === 0, issues };
+}
+
+function logExtractionValidation(kind: "CV" | "TENDER", label: string, validation: { valid: boolean; issues: string[] }) {
+  if (validation.valid) {
+    console.log(`[${kind} EXTRACTION] ${label} — Validation: PASS`);
+  } else {
+    console.warn(`[${kind} EXTRACTION] ${label} — Validation: WARN: ${validation.issues.join("; ")}`);
+  }
+}
+
+function safeAuditMerge(original: any, audited: any): any {
+  const cleanString = (value: any) => String(value || "").trim();
+  const merged = { ...original };
+  const scalarFields = ["fullName", "name", "dateOfBirth", "birth_date", "countryOfCitizenship", "nationality", "email", "phone", "profileSummary", "profile_summary", "location", "educationLevel", "primary_position", "role"];
+  for (const key of scalarFields) {
+    const origVal = cleanString(original?.[key]);
+    const audVal = cleanString(audited?.[key]);
+    if (audVal && (!origVal || audVal.length > origVal.length)) merged[key] = audited[key];
+  }
+
+  const arrayFields = ["experiences", "employment_history", "adequacy_experience", "skills", "software", "training_courses", "training", "professionalMembership", "languages", "education"];
+  for (const key of arrayFields) {
+    const origArr = Array.isArray(original?.[key]) ? original[key] : [];
+    const audArr = Array.isArray(audited?.[key]) ? audited[key] : [];
+    merged[key] = audArr.length >= origArr.length ? audArr : origArr;
+  }
+
+  merged.metadata = { ...(original?.metadata || {}), ...(audited?.metadata || {}) };
+  const metaArrays = ["educations", "certifications", "languages", "awards", "publications", "unmapped_data", "adequacy"];
+  for (const key of metaArrays) {
+    const origArr = Array.isArray(original?.metadata?.[key]) ? original.metadata[key] : [];
+    const audArr = Array.isArray(audited?.metadata?.[key]) ? audited.metadata[key] : [];
+    merged.metadata[key] = audArr.length >= origArr.length ? audArr : origArr;
+  }
+  if (audited?.metadata?.extraction_audit_notes) {
+    merged.metadata.extraction_audit_notes = audited.metadata.extraction_audit_notes;
+  }
+  return sanitizeExtractedValues(merged);
+}
+
 export async function runParseCVText(text: string, tax: string[]): Promise<any[]> {
   const taxonomy = (tax && tax.length > 0) ? tax : ALL_PRIMARY_POSITIONS;
-  const prompt = `You are the world's most aggressive and meticulous expert profile extraction AI.
-  Your absolute directive is to parse the provided CV text line-by-line and extract EVERY SINGLE scrap of useful information into the structured format. NO DETAILS IGNORED.
-  
-  CRITICAL INTELLIGENCE & INFERENCE RULES:
-  0. STRUCTURAL AUDIT BEFORE EXTRACTION: Before filling JSON, mentally reconstruct the CV's structure. Identify header/contact details, profile, education, software/tools, training/courses, employment chronology, project/key assignment sections, languages, certifications, and any tables split by PDF/OCR extraction. Do not treat the text as a flat blob.
-  1. ZERO TRUNCATION & VERBATIM EXTRACTION: Do not summarize or cut short any bullet points or paragraphs. For job descriptions and the profile summary, extract the text 100% EXACTLY as it is written in the CV. If a job has 3 paragraphs of description, you must copy all 3 paragraphs verbatim.
-  2. DO NOT COMBINE JOBS: If the CV lists multiple distinct roles at different times or with different companies (e.g., Senior Land Surveyor at company A, then Chief Land Surveyor at company B), you MUST extract them as completely separate, distinct entries in the 'experiences' array. Never merge them together.
-  3. SMART INFERENCE FOR MISSING FIELDS: If 'Location' is not explicitly stated in a header, intensely analyze the most recent 'Experience' or 'Education' entry to determine it. 
-  4. DATA COMPLETENESS FOR PERFECT CV GENERATION: We rely on you for 100% accurate branded CV outputs. Cross-reference all sections. If a project is mentioned under a role, ensure it's captured in full detail.
-  5. TAXONOMY STRICTNESS: Assign each expert a strict 'role' from EXACTLY this list: [${taxonomy.join(", ")}].
-  6. SPECIFICITY: 'primary_position' must be the actual exact role TITLE from the CV (e.g., 'Chief Land Surveyor').
-  7. CHRONOLOGY & GRANULAR DETAILS: Ensure experiences and projects are captured with specific dates, precise durations, organizations, locations, and extremely detailed descriptions. Extract exact budgets, engineering standards (e.g., FIDIC), and team sizes.
-  8. DIFFERENTIATION BETWEEN EMPLOYMENT RECORD AND ADEQUACY: 
-  - 'experiences' (Employment Record): This is the chronological list of jobs/roles the expert held. You MUST extract exact dates, countries, and provide extremely detailed descriptions of their tasks and activities. Do not miss any details!
-  - 'adequacy_experience' (Adequacy for the Assignment - Key Experience): This MUST be a separate list of specific key *PROJECTS* or specific assignments. You MUST pick up ALL assignments related to the particular jobs they held. You cannot miss out on any assignment. Provide comprehensive descriptions pulling the rich text. CRITICAL: never output only a list of project names in assignment. For each adequacy item, include the project names AND what the expert did on those projects. If several assignments belong to the same period/position, write them as multiple bullet-like lines inside assignment, then add the duties/responsibilities performed during those assignments.
-  9. MASTERFUL FORMAT ROBUSTNESS: CVs from OCR or PDF are messy. Utilize supreme intelligence to reconstruct broken tables, misaligned dates, and disjointed paragraphs to extract the true chronological timeline.
-  10. NAME EXTRACTION: Extract the exact 'fullName' correctly. Look at the top of the CV, headers, signatures, etc. NEVER output "null" or "unknown" if a name exists.
-  11. NO MISSING FIELDS: Every field in the schema MUST be aggressively populated. Search deeply and make reasonable inferences based on context.
-  12. CRITICAL FIELDS FINDER: You MUST carefully read through the CV to find and extract EVERYTHING: FULL NAME, PRIMARY POSITION, ROLE, LOCATION, COUNTRIES, EDUCATION, EXPERIENCE, TYPE, SKILLS, AWARDS, LANGUAGES, CERTIFICATIONS, SOFTWARE, DATE OF BIRTH, CITIZENSHIP, PROFESSIONAL MEMBERSHIP.
-  13. EXCLUDE IRRELEVANT DATA: Strictly EXCLUDE non-professional personal trivia (e.g., "married with kids", hobbies). You must completely capture every drop of professional, academic, technical, and project-related data.
-  14. EDUCATION LEVEL VS EDUCATION DETAILS: educationLevel must be ONLY the highest formal education level such as "PhD", "Master Degree", "Bachelor Degree", "Degree", or "Diploma". metadata.educations[] must list only FORMAL academic education details available, including degree title, field of study, institution, location/country, dates/year, grade, and notes when present. Do NOT include training courses, workshops, Erasmus/exchange entries, licenses, or "qualification to practice" in metadata.educations[].
-  15. UNIVERSAL TRANSLATOR: If the input CV is in a language other than English, natively output JSON translated into professional English.
-  16. REVERSE CHRONOLOGICAL ORDER & EXACT JOB INTEGRITY: You MUST arrange the 'experiences' and 'adequacy' arrays in STANDARD REVERSE CHRONOLOGICAL ORDER (most recent first, from e.g. Present down to oldest past). DO NOT aggressively break or "split" table entries or jobs (e.g. if a CV lists one job from 2006 to 2008, keep it as ONE job experience. Do NOT split it into multiple).
-  17. PROFILE REQUIREMENTS: You MUST extract or synthesize a 'profileSummary' (7-10 lines minimum) capturing the expert's full narrative in paragraph form. Integrate ANY notable achievements, research, or highlights directly into this paragraph. DO NOT output bullet points for a profile.
-  18. SINGLE OBJECT PER EXPERT: You MUST return EXACTLY ONE object inside the 'experts' array for each person found in the CV. Put ALL of their details (location, countries, education, experiences) into that SINGLE object. DO NOT split one person's data across multiple objects in the array.
-  19. STRICT FORMAT & TOKENS CONSERVATION: DO NOT hallucinate repeating strings or get caught in infinite loops. Your dates (Start and End) must be incredibly short and concise (e.g., 'Jan 2018'). DO NOT write long explanations in date fields. Ensure you output completely valid JSON without literal newlines or unescaped quotes inside strings.
-  20. EXTREME EXTRACTION AGGRESSIVENESS: Make sure you are 100% aggressive in extracting the CV. Everything that is on the CV MUST be extracted to the corresponding schema fields unless it really doesn't exist. Do not skip any skills, experiences, adequacy table, certifications, etc. Extract them in extreme detail.
-  21. ZERO MISSED ASSIGNMENTS: For Adequacy, if the CV contains a section like 'Key Experience', 'Relevant Assignments', or 'Projects', you MUST pick up EVERY SINGLE ASSIGNMENT related to a particular job. You cannot miss out on any assignment.
-  22. DURATION CAPTURE: Always capture exact dates, durations, and periods for both experiences and adequacy assignments. Do not leave dates blank if they are present in the CV text.
-  23. BE THE EYE OF THE GODS: Look at every single word in the CV. Leave no job description, no date, no country, no assignment behind.
-  24. OCR/TYPOGRAPHY CLEANUP WITHOUT FACT INVENTION: Correct obvious PDF/OCR/typography problems in output text where needed: broken words, duplicated whitespace, bullet artifacts, strange symbols, inconsistent capitalization, and malformed punctuation. You may improve sentence readability and grammar, but you MUST NOT invent employers, dates, degrees, clients, countries, roles, project names, certifications, or years of experience.
-  25. TABLE RECONSTRUCTION: If dates, employers, positions, countries, and responsibilities are separated by PDF extraction into different lines, intelligently align them into the correct row before writing JSON. A date range followed by an employer and title usually belongs to one employment record.
-  26. EMPLOYMENT VS ADEQUACY SPLIT: 'experiences' is the chronological employer/job record. 'adequacy_experience' is the project/key-assignment proof section. If the CV does not explicitly have an adequacy section, derive adequacy_experience from the most tender-relevant projects and responsibilities found inside the employment history, preserving the actual facts. Each adequacy assignment must explain the expert's contribution/responsibilities, not just name the project.
-  28. ADEQUACY ASSIGNMENT FORMAT: In adequacy_experience[].assignment, use clear bullet-like lines. List each assignment/project as its own line, then include one or more responsibility/duty lines describing what the expert did. Example: "- Design and construction of Khasab-Daba asphalt road\n- Design and repairs of infrastructure at monsoon-affected areas\n- Responsibilities included structural design of bridges, culverts, retaining walls, pavement structures, coordination, and supervision."
-  27. GENERAL CV READINESS: The output must be ready to generate a General tender CV. Every expert should have enough information for DATE OF BIRTH, COUNTRY OF CITIZENSHIP, EDUCATION, PROFILE, SOFTWARE, TRAINING/COURSES, EMPLOYMENT RECORD, ADEQUACY/KEY EXPERIENCE, LANGUAGE SKILLS, and CONTACT INFO when those facts exist in the source.
-  
-  Analyze this document relentlessly like an elite HR headhunter and tender CV specialist who misses absolutely nothing. DO NOT SUMMARIZE EXPERIENCES. Preserve facts, repair obvious text extraction damage, and structure the data so a tender-ready General CV can be produced.
+  const prompt = `You are a meticulous expert profile extraction AI for international tender CVs.
+
+  SECTION 1: READING PROTOCOL
+  1. Before filling JSON, reconstruct the CV structure: header/contact, profile, education, software/tools, training/courses, employment chronology, projects/key assignments, languages, certifications, memberships, publications, and OCR-broken tables.
+  2. Read line by line and section by section. Extract every professional, academic, technical, project, and contact fact available in the source.
+  3. If the CV is not in English, output professional English while preserving all facts exactly.
+
+  SECTION 2: IDENTITY, CONTACT, AND MISSING DATA
+  4. Extract the exact fullName from the top/header/signature. primary_position must be the actual specific job title from the CV.
+  5. Assign role from exactly this taxonomy: [${taxonomy.join(", ")}].
+  6. Missing data handling: if a field cannot be found anywhere in the CV, output "" for string fields or [] for array fields. Do NOT output "N/A", "Not stated", "Unknown", "null", "None", or similar placeholder text.
+  7. Do NOT guess, infer, or fabricate DOB, citizenship, nationality, employers, dates, countries, degrees, clients, project names, certifications, memberships, or years of experience. Only exception: location may use the country from the most recent work experience if no current location is explicitly stated.
+
+  SECTION 3: EXTRACTION FIDELITY
+  8. Preserve original meaning and detail. You may ONLY fix obvious OCR/PDF damage: broken words, garbled symbols, duplicated whitespace, malformed bullets, and table line breaks.
+  9. Do NOT rephrase, summarize, add content, improve grammar beyond OCR repair, or change meaning. When in doubt, keep original wording.
+  10. Do not combine distinct jobs. Do not split one continuous job into multiple entries.
+  11. Never include internal reasoning in any field. No "Wait", "I will", "Let me", "Based on my analysis", or similar text.
+
+  SECTION 4: EMPLOYMENT, ADEQUACY, AND EDUCATION
+  12. experiences is the chronological employment record. Extract every job with organization, country, role, exact dates, duration, client/project when available, and the full responsibilities/achievements text.
+  13. adequacy_experience is project/key-assignment proof. Extract every project/assignment from Key Experience, Relevant Assignments, Projects, or equivalent sections. Each assignment must include project names and what the expert did, not only project names.
+  14. If no explicit adequacy section exists, derive adequacy_experience from major projects and responsibilities already present in employment history, without adding facts.
+  15. Keep experiences and adequacy_experience in reverse chronological order where dates allow.
+  16. educationLevel is only the highest formal level: "PhD", "Master Degree", "Bachelor Degree", "Degree", "Diploma", or "Certificate". metadata.educations must contain only formal academic credentials. Training, licenses, workshops, and short courses belong in training_courses or certifications.
+
+  SECTION 5: OUTPUT FORMAT
+  17. Return exactly one expert object per person found in the CV.
+  18. Ensure valid JSON matching the schema. Dates must be concise. Do not place paragraphs in date fields.
+  19. profileSummary should capture the expert's professional narrative in paragraph form when enough source material exists; do not use bullets for the profile.
+  20. Put any professional information that does not fit other fields into metadata.unmapped_data.
   
   CV Text:
   ${text}`;
 
-  const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({
+  const parseWithPrompt = async (promptText: string, models: string[]) => {
+    const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({
     model: modelName,
-    contents: [{ role: 'user', parts: [{ text: prompt }]}],
+    contents: [{ role: 'user', parts: [{ text: promptText }]}],
     config: {
       responseMimeType: "application/json",
       responseSchema: cvSchema,
       temperature: 0.2,
     }
-  }), ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"]);
+    }), models);
 
-  const responseText = response.text || '{}';
-  console.log("Raw CV Response:", responseText);
-  let result = { experts: [] };
-  try {
-    result = parseGenAIJSON(responseText);
-  } catch (e: any) {
-    console.error("Failed to parse AI JSON:", e.message);
-    // Don't truncate too aggressively so we can debug later if needed
-    throw new Error("Failed to parse AI response as JSON: " + e.message + ". First 200 chars: " + responseText.substring(0, 200));
-  }
-  return (result.experts || []).map((e: any) => {
+    const responseText = response.text || '{}';
+    console.log("Raw CV Response:", responseText);
+    try {
+      return sanitizeExtractedValues(parseGenAIJSON(responseText)) as { experts: any[] };
+    } catch (e: any) {
+      console.error("Failed to parse AI JSON:", e.message);
+      throw new Error("Failed to parse AI response as JSON: " + e.message + ". First 200 chars: " + responseText.substring(0, 200));
+    }
+  };
+
+  const normalizeExperts = (experts: any[]) => experts.map((e: any) => {
     const cleanOptional = (value: any) => {
       const str = String(value || "").trim();
       return str && !str.toLowerCase().includes("not stated") ? str : "";
@@ -427,6 +519,38 @@ export async function runParseCVText(text: string, tax: string[]): Promise<any[]
       experiences: e.experiences || [],
     };
   });
+
+  let result = await parseWithPrompt(prompt, ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"]);
+  let normalizedExperts = normalizeExperts(result.experts || []);
+  const validationIssues = normalizedExperts.flatMap((expert: any) => {
+    const validation = validateExtractedExpert(expert);
+    logExtractionValidation("CV", expert.fullName || expert.name || "Unnamed expert", validation);
+    return validation.issues;
+  });
+
+  if (validationIssues.length > 0) {
+    const retryPrompt = `${prompt}
+
+  EXTRACTION REPAIR PASS:
+  The first extraction had these issues: ${validationIssues.join("; ")}.
+  Re-read the CV text line by line and repair ONLY missing or weak extracted fields that are explicitly present in the source. Do not invent data. Missing source data must remain empty string or empty array.`;
+    try {
+      const retryResult = await parseWithPrompt(retryPrompt, ["gemini-3.1-pro-preview"]);
+      const retryExperts = normalizeExperts(retryResult.experts || []);
+      const retryIssueCount = retryExperts.reduce((count: number, expert: any) => count + validateExtractedExpert(expert).issues.length, 0);
+      const originalIssueCount = normalizedExperts.reduce((count: number, expert: any) => count + validateExtractedExpert(expert).issues.length, 0);
+      if (retryExperts.length && retryIssueCount <= originalIssueCount) {
+        normalizedExperts = retryExperts;
+      }
+    } catch (error: any) {
+      console.warn("[CV EXTRACTION] Repair retry failed; keeping first extraction.", error?.message || error);
+    }
+  }
+
+  normalizedExperts.forEach((expert: any) => {
+    logExtractionValidation("CV", expert.fullName || expert.name || "Unnamed expert", validateExtractedExpert(expert));
+  });
+  return normalizedExperts;
 }
 
 export async function runAuditExtractedCV(rawText: string, expert: any): Promise<any> {
@@ -460,6 +584,7 @@ ${JSON.stringify(expert)}
       contents: [{ role: 'user', parts: [{ text: prompt }]}],
       config: {
         responseMimeType: "application/json",
+        responseSchema: expertResponseSchema,
         temperature: 0.1,
       }
     }), ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"], 1);
@@ -467,20 +592,15 @@ ${JSON.stringify(expert)}
     const output = response.text || "{}";
     let parsed = expert;
     try {
-      parsed = parseGenAIJSON(output);
+      parsed = sanitizeExtractedValues(parseGenAIJSON(output));
     } catch (e) {
       console.error("Parse JSON error in CV audit", e);
       return expert;
     }
 
-    return {
-      ...expert,
-      ...parsed,
-      metadata: {
-        ...(expert.metadata || {}),
-        ...(parsed.metadata || {}),
-      },
-    };
+    const merged = safeAuditMerge(expert, parsed);
+    logExtractionValidation("CV", merged.fullName || merged.name || "Audited expert", validateExtractedExpert(merged));
+    return merged;
   } catch (error) {
     console.error("Audit CV Error:", error);
     return expert;
@@ -650,45 +770,80 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
 }
 
 export async function runParseTenderText(text: string): Promise<any> {
-  const prompt = `You are an ultra-aggressive, highly analytical, and extremely detail-oriented ultimate tender document extraction AI.
-  The user may have provided MULTIPLE documents for a single tender concatenated together (e.g. Primary Tender + Scope/TOR). 
-  Your goal is to parse the provided tender document(s) line-by-line, leaving no word unread.
-  You MUST consolidate the extracted roles, staffing positions, requirements, metrics, scores, and project details from ALL uploaded documents into a single cohesive tender object with 100% accuracy. Do not summarize or ignore details.
-  
-  CRITICAL INSTRUCTIONS (AGGRESSIVE EXTRACTION):
-  1. EXHAUSTIVE COMPREHENSIVE EXTRACTION: Do not skim. Read every single line across all documents. Capture every specific certification, language proficiency, local or international experience requirement, and duration mentioned.
-  2. DEEP POSITION ANALYSIS & CONSOLIDATION: For each staffing position, rigorously map out 'role_description', 'general_experience', 'specific_experience', 'minimum_education', 'minimum_years_experience', 'required_sector_experience', 'required_keywords', and 'mandatory_skills'. You MUST extract the verbatim text for the experience requirements. Do not leave 'general_experience' or 'specific_experience' or 'role_description' blank!
-  3. CAPTURE IMPLICIT & HIDDEN REQUIREMENTS: Read between the lines. If it's a World Bank or EU project, implicitly infer the need for specific safeguards or standards. Identify the exact technologies, methodologies, and frameworks required.
-  4. NO DATA LEFT BEHIND: Think about how this data will be used to perfectly match and tailor CVs. Ensure 'scope_summary' and 'special_requirements' are extremely detailed and rich in context.
-  5. TEAM-LEVEL CONSTRAINTS: Look for any rules that affect the *whole team* rather than a single position (e.g., "The team must have at least one local citizen", "One member must be a certified auditor"). Extract these into 'global_team_constraints'.
-  6. EXHAUSTIVE TENDER TYPE EXTRACTION: In the 'project_sector' array, pick EVERYTHING the job is related to (for example: ["Infrastructure", "Roads", "Bridges", "Construction"]). Be as generous and comprehensive as possible.
-  7. STAFF ROLE TABLES ARE CRITICAL: Search for headings and tables named "Key Experts", "Staff", "Personnel", "Team Composition", "Professional Staff", "Experts Required", "Positions", "Required Experts", "Manpower", "Schedule of Staff", "TOR", and "Terms of Reference". Every role/title in those sections MUST become one item in positions.
-  8. DO NOT CONFUSE CV JOB TITLES WITH TENDER STAFF ROLES: positions[] must contain only roles requested by the tender, not candidate CV roles or company internal roles unless the tender explicitly requests them.
-  9. DEDUPLICATE POSITIONS: If the same staff role appears in several sections, merge it into one position and consolidate all requirements.
-  10. FINAL JSON ONLY: Never include your internal reasoning, uncertainty, "Wait", "I will", or explanatory notes inside any JSON field. If the tender gives alternative rules such as "20 years, 10 years for Omanis", write the requirement once as a concise factual requirement, not as a chain of thoughts.
+  const prompt = `You are a meticulous tender extraction engine for international consultancy and construction tenders.
+  The user may provide multiple documents concatenated together for one tender. Read every document line by line and consolidate them into one structured tender object.
+
+  SECTION 1: SOURCE-ONLY EXTRACTION
+  1. Extract ONLY requirements explicitly written in the document. Do NOT infer, assume, or invent requirements based on project type, donor, country, client, funding source, or your knowledge of similar projects.
+  2. If a value is not available in the tender text, output "" for string fields or [] for array fields. Do NOT output "N/A", "Not stated", "Unknown", "null", "None", or placeholder text.
+  3. Never include internal reasoning in any field. No "Wait", "I will", "Let me", "I need to", "Looking at", or "Based on my analysis".
+
+  SECTION 2: TENDER STRUCTURE READING
+  4. Reconstruct the document structure first: cover data, scope, eligibility, special requirements, team constraints, required positions, TOR/job descriptions, personnel tables, scoring/evaluation matrices, and annexes.
+  5. Tenders often have complex tables broken by PDF extraction. Reconstruct position tables, personnel schedules, requirement tables, and scoring matrices intelligently before extracting.
+  6. Search all headings and sections named Key Experts, Staff, Personnel, Team Composition, Professional Staff, Experts Required, Required Positions, Manpower, Schedule of Staff, TOR, Terms of Reference, Job Description, and Scope of Services.
+
+  SECTION 3: POSITION EXTRACTION
+  7. Every role/title requested by the tender must become one positions[] item. Do not confuse candidate CV job titles with tender-required staff roles.
+  8. For each position, extract position_title, quantity, minimum_education, minimum_years_experience, general_experience, specific_experience, role_description, required_sector_experience, mandatory_skills, required_keywords, and nationality_preference when present.
+  9. For general_experience, specific_experience, role_description, and minimum_education, copy the exact requirement text from the tender after OCR cleanup. Do not summarize or paraphrase.
+  10. If the same role appears in a summary table and a detailed TOR section, merge them into one position and consolidate all requirements.
+
+  SECTION 4: EXTRACTION FIDELITY
+  11. Preserve source wording and meaning. You may only fix obvious OCR/PDF damage: broken words, garbled symbols, duplicated whitespace, malformed bullets, and table line breaks.
+  12. Extract scope_summary, special_requirements, global_team_constraints, project_sector, client, country, tender_number, duration, and submission_type when present.
+  13. Team-level constraints belong in global_team_constraints, not inside a single position, unless the tender clearly assigns them to one role.
 
   Tender Text(s):
   ${text}`;
   
-  const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({
+  const parseTenderWithPrompt = async (promptText: string, models: string[]) => {
+    const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({
     model: modelName,
-    contents: [{ role: 'user', parts: [{ text: prompt }]}],
+    contents: [{ role: 'user', parts: [{ text: promptText }]}],
     config: {
       responseMimeType: "application/json",
       responseSchema: tenderSchema,
       temperature: 0.1,
     }
-  }), ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"]);
+    }), models);
 
-  const responseText = response.text || '{}';
-  console.log("Raw Tender Response:", responseText);
-  let parsed = {};
-  try {
-    parsed = parseGenAIJSON(responseText);
-  } catch (e) {
-    console.error("Failed to parse AI JSON for Tender:", e);
+    const responseText = response.text || '{}';
+    console.log("Raw Tender Response:", responseText);
+    try {
+      return sanitizeExtractedValues(parseGenAIJSON(responseText));
+    } catch (e) {
+      console.error("Failed to parse AI JSON for Tender:", e);
+      return {};
+    }
+  };
+
+  let parsed = await parseTenderWithPrompt(prompt, ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"]);
+  let tender = postProcessTenderExtraction(parsed, text);
+  let validation = validateExtractedTender(tender);
+  logExtractionValidation("TENDER", tender.tender_title || tender.name || "Untitled tender", validation);
+
+  if (!validation.valid) {
+    const retryPrompt = `${prompt}
+
+  TENDER EXTRACTION REPAIR PASS:
+  The first extraction had these issues: ${validation.issues.join("; ")}.
+  Re-read every tender line and repair missing positions, role descriptions, experience requirements, scope, and explicit constraints that are present in the source. Do not invent anything. Missing source data must remain empty string or empty array.`;
+    try {
+      const retryParsed = await parseTenderWithPrompt(retryPrompt, ["gemini-3.1-pro-preview"]);
+      const retryTender = postProcessTenderExtraction(retryParsed, text);
+      const retryValidation = validateExtractedTender(retryTender);
+      logExtractionValidation("TENDER", retryTender.tender_title || retryTender.name || "Retried tender", retryValidation);
+      if (retryValidation.issues.length <= validation.issues.length) {
+        tender = retryTender;
+        validation = retryValidation;
+      }
+    } catch (error: any) {
+      console.warn("[TENDER EXTRACTION] Repair retry failed; keeping first extraction.", error?.message || error);
+    }
   }
-  return postProcessTenderExtraction(parsed, text);
+
+  return sanitizeExtractedValues(tender);
 }
 
 // Calculate cosine similarity between two vectors
@@ -743,7 +898,17 @@ export async function runVectorMatchEngine(tender: any, positionId: string, expe
   const reqWords = Array.from(new Set(reqLower.match(/\b\w{4,}\b/g) || []));
 
   const scoredExperts = experts.map((e: any) => {
-    const expertText = JSON.stringify({ p: e.primary_position, s: e.skills, r: e.experiences, h: e.profileSummary }).toLowerCase();
+    const expertText = JSON.stringify({
+      p: e.primary_position,
+      s: e.skills,
+      r: e.experiences,
+      a: e.adequacy_experience || e.metadata?.adequacy,
+      c: e.metadata?.certifications,
+      sw: e.software,
+      t: e.training_courses || e.training,
+      m: e.professionalMembership,
+      h: e.profileSummary,
+    }).toLowerCase();
     
     let matchCount = 0;
     for (const w of reqWords) {
@@ -806,7 +971,14 @@ export async function runVectorMatchEngine(tender: any, positionId: string, expe
     education: e.educationLevel || e.education,
     languages: e.languages,
     skills: e.skills, 
-    projects: e.experiences || e.projects 
+    projects: e.experiences || e.projects,
+    certifications: e.metadata?.certifications || [],
+    adequacy_experience: e.adequacy_experience || e.metadata?.adequacy || [],
+    software: e.software || [],
+    training: e.training_courses || e.training || [],
+    professionalMembership: e.professionalMembership || [],
+    awards: e.metadata?.awards || [],
+    publications: e.metadata?.publications || [],
   }))) }
 
   For each candidate in the "Candidates to Evaluate" list, you MUST output an evaluation and a score out of 100. Do NOT omit any candidate, even if their score is 0.
