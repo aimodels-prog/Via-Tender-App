@@ -44,6 +44,7 @@ const joinValues = (value: any, mapper?: (item: any) => string) =>
     .map((item) => String(item || '').trim())
     .filter(Boolean)
     .join(', ');
+const splitCommaValues = (value: string) => value ? value.split(',').map(item => item.trim()).filter(Boolean) : [];
 
 export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData }: AddExpertModalProps) {
   const normalizedInitialData = initialData ? normalizeExpertCollections(initialData) : undefined;
@@ -74,6 +75,10 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
   const [adequacyAssignments, setAdequacyAssignments] = useState<any[]>(normalizedInitialData?.adequacy_experience || normalizedInitialData?.metadata?.adequacy || []);
   const [projects, setProjects] = useState<any[]>(normalizedInitialData?.projects || []);
   const [unmappedData, setUnmappedData] = useState<any[]>(normalizedInitialData?.metadata?.unmapped_data || []);
+  const [trainingCourses, setTrainingCourses] = useState<string>(joinValues(normalizedInitialData?.training_courses || normalizedInitialData?.training));
+  const [professionalMembership, setProfessionalMembership] = useState<string>(joinValues(normalizedInitialData?.professionalMembership));
+  const [awards, setAwards] = useState<any[]>(normalizedInitialData?.metadata?.awards || []);
+  const [publications, setPublications] = useState<any[]>(normalizedInitialData?.metadata?.publications || []);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -119,6 +124,10 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
       setAdequacyAssignments(normalized.adequacy_experience || normalized.metadata?.adequacy || []);
       setProjects(normalized.projects || []);
       setUnmappedData(normalized.metadata?.unmapped_data || []);
+      setTrainingCourses(joinValues(normalized.training_courses || normalized.training));
+      setProfessionalMembership(joinValues(normalized.professionalMembership));
+      setAwards(normalized.metadata?.awards || []);
+      setPublications(normalized.metadata?.publications || []);
     }
   }, [initialData]);
 
@@ -186,6 +195,8 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
       countries: formData.countries ? formData.countries.split(',').map(c => c.trim()).filter(Boolean) : [],
       skills: formData.skills ? formData.skills.split(',').map(s => s.trim()).filter(Boolean) : [],
       software: formData.software ? formData.software.split(',').map(s => s.trim()).filter(Boolean) : [],
+      training_courses: splitCommaValues(trainingCourses),
+      professionalMembership: splitCommaValues(professionalMembership),
       experienceYears: parseInt(formData.experienceYears as string) || 0,
       experiences,
       projects,
@@ -194,6 +205,8 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
         educations,
         languages: formData.languages ? formData.languages.split(',').map(l => ({ name: l.trim() })).filter(l => l.name) : [],
         certifications: formData.certifications ? formData.certifications.split(',').map(c => ({ title: c.trim() })).filter(c => c.title) : [],
+        awards,
+        publications,
         adequacy: adequacyAssignments,
         unmapped_data: unmappedData
       }
@@ -320,6 +333,73 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
                 <div className="space-y-1 col-span-2">
                   <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Certifications (comma-separated)</label>
                   <input name="certifications" value={formData.certifications} onChange={handleChange} type="text" className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none shadow-sm" />
+                </div>
+              </div>
+            </Accordion>
+
+            {/* Professional Extras */}
+            <Accordion title="Professional Extras" count={splitCommaValues(trainingCourses).length + splitCommaValues(professionalMembership).length + awards.length + publications.length} icon={<span className="text-xl">★</span>}>
+              <div className="space-y-6">
+                <div className="grid grid-cols-2 gap-6">
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Training Courses (comma-separated)</label>
+                    <textarea value={trainingCourses} onChange={(e) => setTrainingCourses(e.target.value)} rows={3} className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none shadow-sm" />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-slate-600 uppercase tracking-wide">Professional Memberships (comma-separated)</label>
+                    <textarea value={professionalMembership} onChange={(e) => setProfessionalMembership(e.target.value)} rows={3} className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none shadow-sm" />
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">Awards ({awards.length})</h4>
+                    <button type="button" onClick={() => setAwards(prev => [...prev, {}])} className="text-xs font-semibold text-blue-700 hover:text-blue-900 flex items-center gap-1">
+                      <Plus size={14} /> Add Award
+                    </button>
+                  </div>
+                  {awards.map((award, idx) => (
+                    <div key={idx} className="p-4 border border-slate-200 rounded-lg bg-white shadow-sm">
+                      <div className="flex justify-between mb-3 border-b border-slate-100 pb-2">
+                        <span className="font-semibold text-sm text-slate-700">Award {idx + 1}</span>
+                        <button type="button" onClick={() => setAwards(prev => prev.filter((_, i) => i !== idx))} className="text-red-500 opacity-60 hover:opacity-100 p-1">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <input type="text" value={award.title || ''} onChange={(e) => handleArrayChange(setAwards, idx, 'title', e.target.value)} placeholder="Title" className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm shadow-sm" />
+                        <input type="text" value={award.issuer || ''} onChange={(e) => handleArrayChange(setAwards, idx, 'issuer', e.target.value)} placeholder="Issuer" className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm shadow-sm" />
+                        <input type="text" value={award.country || ''} onChange={(e) => handleArrayChange(setAwards, idx, 'country', e.target.value)} placeholder="Country" className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm shadow-sm" />
+                        <input type="text" value={award.year || ''} onChange={(e) => handleArrayChange(setAwards, idx, 'year', e.target.value)} placeholder="Year" className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm shadow-sm" />
+                        <textarea value={award.description || ''} onChange={(e) => handleArrayChange(setAwards, idx, 'description', e.target.value)} placeholder="Description" rows={2} className="col-span-2 w-full border border-slate-200 rounded-md px-3 py-2 text-sm shadow-sm" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">Publications ({publications.length})</h4>
+                    <button type="button" onClick={() => setPublications(prev => [...prev, {}])} className="text-xs font-semibold text-blue-700 hover:text-blue-900 flex items-center gap-1">
+                      <Plus size={14} /> Add Publication
+                    </button>
+                  </div>
+                  {publications.map((publication, idx) => (
+                    <div key={idx} className="p-4 border border-slate-200 rounded-lg bg-white shadow-sm">
+                      <div className="flex justify-between mb-3 border-b border-slate-100 pb-2">
+                        <span className="font-semibold text-sm text-slate-700">Publication {idx + 1}</span>
+                        <button type="button" onClick={() => setPublications(prev => prev.filter((_, i) => i !== idx))} className="text-red-500 opacity-60 hover:opacity-100 p-1">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <input type="text" value={publication.title || ''} onChange={(e) => handleArrayChange(setPublications, idx, 'title', e.target.value)} placeholder="Title" className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm shadow-sm" />
+                        <input type="text" value={publication.journal || ''} onChange={(e) => handleArrayChange(setPublications, idx, 'journal', e.target.value)} placeholder="Journal / Publisher" className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm shadow-sm" />
+                        <input type="text" value={publication.year || ''} onChange={(e) => handleArrayChange(setPublications, idx, 'year', e.target.value)} placeholder="Year" className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm shadow-sm" />
+                        <textarea value={publication.description || ''} onChange={(e) => handleArrayChange(setPublications, idx, 'description', e.target.value)} placeholder="Description" rows={2} className="col-span-2 w-full border border-slate-200 rounded-md px-3 py-2 text-sm shadow-sm" />
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
             </Accordion>
@@ -519,6 +599,10 @@ export default function AddExpertModal({ isOpen, onClose, onSuccess, initialData
                       setProjects(rep.projects || []);
                       setAdequacyAssignments(rep.adequacy_experience || rep.metadata?.adequacy || []);
                       setUnmappedData(rep.metadata?.unmapped_data || []);
+                      setTrainingCourses(joinValues(rep.training_courses || rep.training));
+                      setProfessionalMembership(joinValues(rep.professionalMembership));
+                      setAwards(rep.metadata?.awards || []);
+                      setPublications(rep.metadata?.publications || []);
                       alert("Successfully re-analyzed document. Review the changes before clicking Update Expert.");
                     }
                   } catch (e: any) {

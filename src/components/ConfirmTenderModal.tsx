@@ -10,12 +10,19 @@ interface ConfirmTenderModalProps {
   onCancel: () => void;
 }
 
+const toArray = (value: any): string[] => Array.isArray(value) ? value.map(item => String(item || '').trim()).filter(Boolean) : value ? [String(value).trim()].filter(Boolean) : [];
+const joinLines = (value: any) => toArray(value).join('\n');
+const splitLines = (value: string) => value.split('\n').map(item => item.trim()).filter(Boolean);
+
 export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderModalProps) {
   const [editedTender, setEditedTender] = useState({
     ...tender,
     name: tender.name || tender.tender_title || '',
     internal_code: tender.internal_code || tender.tender_number || `TEN-${Math.floor(Math.random()*10000)}`,
     client: tender.client || '',
+    scope_summary: tender.scope_summary || '',
+    special_requirements: toArray(tender.special_requirements),
+    global_team_constraints: toArray(tender.global_team_constraints),
     tender_format: tender.tender_format || 'GEN-X1',
     positions: tender.positions?.map((p: any) => ({ ...p })) || [],
     branding: tender.branding || { header_base64: "", footer_base64: "", header_name: "", footer_name: "" }
@@ -142,6 +149,43 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                 onChange={e => setEditedTender({...editedTender, tender_format: e.target.value})}
                 className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
               />
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Tender Context</h3>
+              <p className="text-xs text-slate-500 mt-1">Confirm the extracted scope and team-level requirements before matching.</p>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Scope Summary</label>
+              <textarea
+                value={editedTender.scope_summary || ''}
+                onChange={e => setEditedTender({ ...editedTender, scope_summary: e.target.value })}
+                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all min-h-[120px]"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-6">
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Special Requirements</label>
+                <textarea
+                  value={joinLines(editedTender.special_requirements)}
+                  onChange={e => setEditedTender({ ...editedTender, special_requirements: splitLines(e.target.value) })}
+                  placeholder="One requirement per line"
+                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all min-h-[110px]"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Global Team Constraints</label>
+                <textarea
+                  value={joinLines(editedTender.global_team_constraints)}
+                  onChange={e => setEditedTender({ ...editedTender, global_team_constraints: splitLines(e.target.value) })}
+                  placeholder="One team-level constraint per line"
+                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all min-h-[110px]"
+                />
+              </div>
             </div>
           </div>
 
