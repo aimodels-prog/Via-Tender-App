@@ -36,6 +36,36 @@ function normalizePdfText(value: string) {
     .trim();
 }
 
+function textContentItemsToLineText(items: any[]) {
+  const rows: Array<{ y: number; items: Array<{ x: number; str: string }> }> = [];
+  for (const item of items || []) {
+    const str = String(item?.str || "").trim();
+    if (!str) continue;
+    const transform = item?.transform || [];
+    const x = Number(transform[4] || 0);
+    const y = Number(transform[5] || 0);
+    let row = rows.find((candidate) => Math.abs(candidate.y - y) <= 2);
+    if (!row) {
+      row = { y, items: [] };
+      rows.push(row);
+    }
+    row.items.push({ x, str });
+  }
+
+  return rows
+    .sort((a, b) => b.y - a.y)
+    .map((row) =>
+      normalizePdfText(
+        row.items
+          .sort((a, b) => a.x - b.x)
+          .map((item) => item.str)
+          .join(" "),
+      ),
+    )
+    .filter(Boolean)
+    .join("\n");
+}
+
 function removeRepeatedCvHeaders(text: string) {
   return text
     .replace(/\b[A-Z][a-z]+ [A-Z][a-z]+ [A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\s+Mobile:\s*\+?[\d\s,+-]+/gi, " ")
@@ -224,7 +254,7 @@ export async function extractDocumentFromFile(file: File): Promise<ExtractedDocu
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        const pageText = normalizePdfText(textContent.items.map((item: any) => item.str).join(" "));
+        const pageText = textContentItemsToLineText(textContent.items);
         pages.push({
           pageNumber: i,
           text: pageText,
@@ -271,7 +301,7 @@ export async function extractTenderTextFromFile(file: File): Promise<string> {
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
         const textContent = await page.getTextContent();
-        const pageText = normalizePdfText(textContent.items.map((item: any) => item.str).join(" "));
+        const pageText = textContentItemsToLineText(textContent.items);
         pages.push({
           pageNumber: i,
           text: pageText,

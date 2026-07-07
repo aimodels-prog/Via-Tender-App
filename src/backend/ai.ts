@@ -821,10 +821,108 @@ function prepareTenderPromptText(rawText: string) {
   ].join("\n\n").slice(0, maxChars);
 }
 
+function prepareTenderPromptChunks(rawText: string) {
+  const text = String(rawText || "");
+  if (text.length <= 90000) return [text];
+
+  const pageBlocks = text
+    .split(/(?=---\s*PAGE\s+\d+\s*---)/i)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 80);
+
+  const scoreBlock = (block: string) => {
+    const lower = block.toLowerCase();
+    const signals: Array<[RegExp, number]> = [
+      [/\b(key experts?|professional staff|experts required|required experts|staffing|personnel|team composition|consultant'?s team)\b/i, 28],
+      [/\b(terms of reference|tor|scope of services|job description|role description)\b/i, 24],
+      [/\b(job title|position|qualification|minimum education|experience|responsibilit(?:y|ies)|duties)\b/i, 16],
+      [/\b(man[-\s]?month|person[-\s]?month|schedule of staff|staff schedule|input schedule)\b/i, 12],
+      [/\b(evaluation criteria|technical proposal|special requirements?|eligibility|mandatory)\b/i, 8],
+      [/\b(feasibility study|consultancy services|request for proposal|rfp|client|employer)\b/i, 4],
+    ];
+    return signals.reduce((score, [pattern, weight]) => score + (pattern.test(lower) ? weight : 0), 0);
+  };
+
+  const scored = (pageBlocks.length ? pageBlocks : text.split(/\n{2,}/))
+    .map((block, index) => ({ block, index, score: scoreBlock(block) }))
+    .filter((item) => item.block.length > 80);
+  const priority = scored
+    .filter((item) => item.score >= 12)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .slice(0, 24)
+    .sort((a, b) => a.index - b.index);
+
+  const chunks: string[] = [];
+  const opening = text.slice(0, Math.min(18000, text.length));
+  if (opening.trim()) chunks.push(`--- DOCUMENT OPENING / CLIENT / TITLE / SUBMISSION CONTEXT ---\n${opening}`);
+
+  let current = "";
+  for (const item of priority) {
+    const next = `${current}\n\n${item.block}`.trim();
+    if (next.length > 45000 && current) {
+      chunks.push(`--- PRIORITY STAFFING / TOR / REQUIREMENTS CHUNK ---\n${current}`);
+      current = item.block;
+    } else {
+      current = next;
+    }
+  }
+  if (current.trim()) chunks.push(`--- PRIORITY STAFFING / TOR / REQUIREMENTS CHUNK ---\n${current}`);
+
+  const ending = text.slice(Math.max(0, text.length - 10000));
+  if (ending.trim()) chunks.push(`--- DOCUMENT ENDING / ANNEX CONTEXT ---\n${ending}`);
+  return chunks.slice(0, 6);
+}
+
+function mergeTenderExtractions(items: any[]) {
+  const merged: any = {};
+  const scalarFields = ["tender_format", "tender_title", "name", "client", "country", "tender_number", "deadline", "duration", "submission_type", "scope_summary"];
+  const arrayFields = ["special_requirements", "global_team_constraints", "project_sector", "source_evidence"];
+  const bestText = (current: any, next: any) => {
+    const currentText = String(current || "").trim();
+    const nextText = String(next || "").trim();
+    if (!currentText) return nextText;
+    if (!nextText) return currentText;
+    return nextText.length > currentText.length ? nextText : currentText;
+  };
+  const mergeArray = (current: any, next: any) =>
+    Array.from(new Set([...(Array.isArray(current) ? current : []), ...(Array.isArray(next) ? next : [])].filter(Boolean)));
+  const positionsByTitle = new Map<string, any>();
+
+  for (const item of items.filter(Boolean)) {
+    for (const field of scalarFields) merged[field] = bestText(merged[field], item[field]);
+    for (const field of arrayFields) merged[field] = mergeArray(merged[field], item[field]);
+    for (const position of Array.isArray(item.positions) ? item.positions : []) {
+      const title = String(position.position_title || position.title || "").trim();
+      if (!title) continue;
+      const key = title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      const current = positionsByTitle.get(key) || {};
+      positionsByTitle.set(key, {
+        ...current,
+        ...position,
+        position_title: current.position_title || title,
+        quantity: current.quantity || position.quantity || 1,
+        minimum_education: bestText(current.minimum_education, position.minimum_education),
+        minimum_years_experience: current.minimum_years_experience || position.minimum_years_experience,
+        general_experience: bestText(current.general_experience, position.general_experience),
+        specific_experience: bestText(current.specific_experience, position.specific_experience),
+        role_description: bestText(current.role_description, position.role_description || position.description),
+        required_sector_experience: mergeArray(current.required_sector_experience, position.required_sector_experience),
+        mandatory_skills: mergeArray(current.mandatory_skills, position.mandatory_skills),
+        required_keywords: mergeArray(current.required_keywords, position.required_keywords),
+        nationality_preference: bestText(current.nationality_preference, position.nationality_preference),
+      });
+    }
+  }
+
+  merged.positions = Array.from(positionsByTitle.values());
+  return normalizeTenderRecord(sanitizeExtractedValues(merged));
+}
+
 export async function runParseTenderText(text: string): Promise<any> {
   const promptTenderText = prepareTenderPromptText(text);
-  const prompt = `You are a meticulous tender extraction engine for international consultancy and construction tenders.
+  const buildTenderPrompt = (tenderText: string, chunkNote = "") => `You are a meticulous tender extraction engine for international consultancy and construction tenders.
   The user may provide multiple documents concatenated together for one tender. Read every document line by line and consolidate them into one structured tender object.
+  ${chunkNote}
 
   SECTION 1: SOURCE-ONLY EXTRACTION
   1. Extract ONLY requirements explicitly written in the document. Do NOT infer, assume, or invent requirements based on project type, donor, country, client, funding source, or your knowledge of similar projects.
@@ -848,7 +946,8 @@ export async function runParseTenderText(text: string): Promise<any> {
   13. Team-level constraints belong in global_team_constraints, not inside a single position, unless the tender clearly assigns them to one role.
 
   Tender Text(s):
-  ${promptTenderText}`;
+  ${tenderText}`;
+  const prompt = buildTenderPrompt(promptTenderText);
   
   const parseTenderWithPrompt = async (promptText: string, models: string[]) => {
     const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({
@@ -871,7 +970,27 @@ export async function runParseTenderText(text: string): Promise<any> {
     }
   };
 
-  let parsed = await parseTenderWithPrompt(prompt, ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"]);
+  const chunks = prepareTenderPromptChunks(text);
+  let parsed: any;
+  if (chunks.length > 1) {
+    const chunkResults = await Promise.allSettled(
+      chunks.map((chunk, index) =>
+        parseTenderWithPrompt(
+          buildTenderPrompt(
+            chunk,
+            `This is extraction chunk ${index + 1} of ${chunks.length}. Extract every tender fact visible in this chunk. Another pass will merge all chunks, so do not omit positions just because surrounding pages may exist elsewhere.`,
+          ),
+          ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview"],
+        ),
+      ),
+    );
+    const fulfilled = chunkResults
+      .filter((result): result is PromiseFulfilledResult<any> => result.status === "fulfilled")
+      .map((result) => result.value);
+    parsed = fulfilled.length ? mergeTenderExtractions(fulfilled) : await parseTenderWithPrompt(prompt, ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"]);
+  } else {
+    parsed = await parseTenderWithPrompt(prompt, ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"]);
+  }
   let tender = postProcessTenderExtraction(parsed, text);
   let validation = validateExtractedTender(tender);
   logExtractionValidation("TENDER", tender.tender_title || tender.name || "Untitled tender", validation);
