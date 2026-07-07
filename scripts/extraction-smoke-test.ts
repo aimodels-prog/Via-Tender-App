@@ -3,6 +3,7 @@ import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
 import { extractUniversalCVFacts, extractUniversalTenderFacts } from "../src/lib/universalExtraction.ts";
 import { normalizeExpertCollections, postProcessExtractedExpert } from "../src/lib/cvPostProcess.ts";
+import { normalizeTenderRecord } from "../src/lib/tenderPostProcess.ts";
 
 async function readDocxText(path: string) {
   const result = await mammoth.extractRawText({ buffer: fs.readFileSync(path) });
@@ -121,6 +122,27 @@ async function main() {
   if (!teamLeader?.role_description?.includes("Lead the feasibility study")) throw new Error("Expected Team Leader role description to be recovered.");
   if (!teamLeader?.general_experience?.includes("15 years")) throw new Error("Expected Team Leader general experience to be recovered.");
   if (!teamLeader?.specific_experience?.includes("8 years")) throw new Error("Expected Team Leader specific experience to be recovered.");
+
+  const pollutedTender = normalizeTenderRecord({
+    positions: [
+      { position_title: "Team Leader", general_experience: "15 years" },
+      { position_title: "Traffic Engineer" },
+      { position_title: "Instructions to Consultant" },
+      { position_title: "Name of Expert" },
+      { position_title: "CODE OF CONDUCT FOR EXPERT" },
+      { position_title: "Appendix B - Key Expert" },
+      { position_title: "The Consultant" },
+      { position_title: "FIDIC International Federation of Consulting Engineer" },
+      { position_title: "Planning and Design Manager" },
+    ],
+  });
+  const cleanedTenderTitles = pollutedTender.positions.map((item: any) => item.position_title);
+  ["Team Leader", "Traffic Engineer", "Planning and Design Manager"].forEach((title) => {
+    if (!cleanedTenderTitles.includes(title)) throw new Error(`Expected cleaned tender positions to keep ${title}.`);
+  });
+  ["Instructions to Consultant", "Name of Expert", "CODE OF CONDUCT FOR EXPERT", "Appendix B - Key Expert", "The Consultant", "FIDIC International Federation of Consulting Engineer"].forEach((title) => {
+    if (cleanedTenderTitles.includes(title)) throw new Error(`Expected cleaned tender positions to remove ${title}.`);
+  });
 
   const torPaths = [
     "C:/Users/Dell/Downloads/TOR 2024.OM.RFP.49_1.pdf",

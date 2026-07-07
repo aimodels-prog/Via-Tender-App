@@ -77,11 +77,52 @@ export function normalizeTenderPosition(position: any, index = 0) {
   };
 }
 
+function isInvalidTenderPositionTitle(value: string) {
+  const title = cleanText(value);
+  if (!title) return true;
+  if (/\bTECH-\d+[A-Z]?\b/i.test(title)) return true;
+  if (/^(?:A|B|C|D|E|F)\s*-\s*Consultant$/i.test(title)) return true;
+  if (/^(?:The Consultant|For the Consultant|Sub-consultant|Consultant\.?\s*The Consultant)$/i.test(title)) return true;
+  if (/^(?:Name of Expert|For Expert|Description of Key Expert|Replacement of Key Expert|Removal of Expert)$/i.test(title)) return true;
+  if (/^(?:Instructions to Consultant|Assignments Consultant|Services while the Consultant|Facilities to be provided by the Consultant)$/i.test(title)) return true;
+  if (/^(?:Appendix|Appendix\s+[A-Z]|Performance Declaration|Code of Conduct|Countersignature|Payments to the Consultant)/i.test(title)) return true;
+  if (/\b(?:mutual rights and obligations|authority of in case|consultant instructing|commencement the consultant|conflict of the consultant|bank\. the consultant|reporting the consultant|forced labor|child labor|taxes and duties|access to project|opportunity requirements|training of the consultant)\b/i.test(title)) return true;
+  if (/\b(?:consultant'?s\s+(organization|experience|methodology|work plan|comments?|suggestions?)|technical proposal|financial proposal|proposal form|evaluation criteria|data sheet|instruction to consultant)\b/i.test(title)) return true;
+  if (/^List only those assignments/i.test(title)) return true;
+  if (/^Relationships \(?including its Expert/i.test(title)) return true;
+  if (/^Representative of the Consultant$/i.test(title)) return true;
+  if (/^FIDIC International Federation of Consulting Engineer/i.test(title)) return true;
+  if (/^Institution of Quantity Surveyor$/i.test(title)) return true;
+  if (/^Engineer Engineer$/i.test(title)) return true;
+  if (/^(?:F\.\s*)?Payments to the Consultant$/i.test(title)) return true;
+  if (/^Removal of If the Client finds/i.test(title)) return true;
+  if (/^(?:Preliminary Design\/FEED\/Basic Engineer|Design\/FEED\/Basic Engineer|Chartered\/Registered Engineer|Registered Quantity surveyor)$/i.test(title)) return true;
+  return false;
+}
+
+function hasPositionRequirementDetail(position: any) {
+  return Boolean(
+    cleanText(position.minimum_education) ||
+    cleanText(position.general_experience) ||
+    cleanText(position.specific_experience) ||
+    cleanText(position.role_description) ||
+    (Array.isArray(position.required_keywords) && position.required_keywords.length) ||
+    (Array.isArray(position.mandatory_skills) && position.mandatory_skills.length)
+  );
+}
+
+function isInvalidTenderPosition(position: any) {
+  const title = cleanText(position?.position_title);
+  if (isInvalidTenderPositionTitle(title)) return true;
+  if (/^(?:General Manager|Managing Director|General Manager[-\s].+)$/i.test(title) && !hasPositionRequirementDetail(position)) return true;
+  return false;
+}
+
 export function normalizeTenderRecord(tender: any) {
   const positions = Array.isArray(tender?.positions) ? tender.positions : [];
   const normalizedPositions = positions
     .map((position, index) => normalizeTenderPosition(position, index))
-    .filter((position) => position.position_title);
+    .filter((position) => position.position_title && !isInvalidTenderPosition(position));
 
   return {
     ...tender,
