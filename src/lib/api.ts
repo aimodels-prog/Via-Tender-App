@@ -129,6 +129,68 @@ function preprocessCvText(rawPages: ExtractedDocumentPage[]): ExtractedDocument 
   };
 }
 
+function scoreTenderPage(text: string) {
+  const t = String(text || "").toLowerCase();
+  const weightedSignals: Array<[RegExp, number]> = [
+    [/\b(key experts?|professional staff|experts required|required experts|staffing|personnel|team composition|consultant'?s team)\b/i, 18],
+    [/\b(terms of reference|tor|scope of services|job description|role description)\b/i, 14],
+    [/\b(position|job title|role|qualification|minimum education|experience|responsibilit(?:y|ies)|duties)\b/i, 8],
+    [/\b(man[-\s]?month|person[-\s]?month|schedule of staff|staff schedule|input schedule)\b/i, 8],
+    [/\b(feasibility study|consultancy services|request for proposal|rfp)\b/i, 3],
+  ];
+  return weightedSignals.reduce((score, [pattern, weight]) => score + (pattern.test(t) ? weight : 0), 0);
+}
+
+function preprocessTenderText(rawPages: ExtractedDocumentPage[]): ExtractedDocument {
+  const blankPages = rawPages.filter((page) => page.isBlank).map((page) => page.pageNumber);
+  const nonBlankPages = rawPages.filter((page) => !page.isBlank);
+  const pageScores = nonBlankPages.map((page) => ({
+    pageNumber: page.pageNumber,
+    score: scoreTenderPage(page.text),
+  }));
+  const priorityPageSet = new Set<number>();
+
+  pageScores
+    .filter((page) => page.score >= 8)
+    .forEach((page) => {
+      priorityPageSet.add(page.pageNumber);
+      if (page.pageNumber > 1) priorityPageSet.add(page.pageNumber - 1);
+      if (page.pageNumber < rawPages.length) priorityPageSet.add(page.pageNumber + 1);
+    });
+
+  rawPages.slice(0, Math.min(8, rawPages.length)).forEach((page) => {
+    if (!page.isBlank) priorityPageSet.add(page.pageNumber);
+  });
+
+  const priorityPages = nonBlankPages.filter((page) => priorityPageSet.has(page.pageNumber));
+  const remainingPages = nonBlankPages.filter((page) => !priorityPageSet.has(page.pageNumber));
+  const formatPage = (page: ExtractedDocumentPage) => `--- PAGE ${page.pageNumber} ---\n${page.text}`;
+  const priorityText = priorityPages.map(formatPage).join("\n\n");
+  const remainingText = remainingPages.map(formatPage).join("\n\n");
+  const text = [
+    "--- HIGH PRIORITY TENDER PAGES: staffing, TOR, scope, qualifications, experience, responsibilities ---",
+    priorityText,
+    "--- REMAINING TENDER PAGES: preserved for client, scope, submission, and special requirement context ---",
+    remainingText,
+  ].filter(Boolean).join("\n\n").trim();
+
+  return {
+    text,
+    rawText: nonBlankPages.map(formatPage).join("\n\n"),
+    pages: rawPages,
+    metadata: {
+      totalPages: rawPages.length,
+      usedPages: nonBlankPages.map((page) => page.pageNumber),
+      blankPages,
+      likelyAttachmentPages: [],
+      cleanupNotes: [
+        "Used tender-specific extraction; preserved all selectable tender pages.",
+        `Prioritized ${priorityPages.length} page(s) containing staffing, TOR, scope, qualification, or experience signals.`,
+      ],
+    },
+  };
+}
+
 export async function extractDocumentFromFile(file: File): Promise<ExtractedDocument> {
   const fileExt = file.name.split('.').pop()?.toLowerCase();
   const arrayBuffer = await file.arrayBuffer();
@@ -194,6 +256,36 @@ export async function extractDocumentFromFile(file: File): Promise<ExtractedDocu
 }
 
 export async function extractTextFromPDF(file: File): Promise<string> {
+  const extracted = await extractDocumentFromFile(file);
+  return extracted.text;
+}
+
+export async function extractTenderTextFromFile(file: File): Promise<string> {
+  const fileExt = file.name.split('.').pop()?.toLowerCase();
+  const arrayBuffer = await file.arrayBuffer();
+
+  if (fileExt === 'pdf') {
+    try {
+      const pdf = await getDocument({ data: arrayBuffer }).promise;
+      const pages: ExtractedDocumentPage[] = [];
+      for (let i = 1; i <= pdf.numPages; i++) {
+        const page = await pdf.getPage(i);
+        const textContent = await page.getTextContent();
+        const pageText = normalizePdfText(textContent.items.map((item: any) => item.str).join(" "));
+        pages.push({
+          pageNumber: i,
+          text: pageText,
+          charCount: pageText.length,
+          isBlank: pageText.length < 20,
+        });
+      }
+      return preprocessTenderText(pages).text;
+    } catch (err) {
+      console.error("Failed to parse tender PDF:", err);
+      throw new Error("Unable to parse tender PDF file.");
+    }
+  }
+
   const extracted = await extractDocumentFromFile(file);
   return extracted.text;
 }

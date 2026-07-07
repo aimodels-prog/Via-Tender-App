@@ -769,7 +769,60 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
   });
 }
 
+function prepareTenderPromptText(rawText: string) {
+  const text = String(rawText || "");
+  const maxChars = 90000;
+  if (text.length <= maxChars) return text;
+
+  const pageBlocks = text
+    .split(/(?=---\s*PAGE\s+\d+\s*---)/i)
+    .map((block) => block.trim())
+    .filter(Boolean);
+
+  const scoreBlock = (block: string) => {
+    const lower = block.toLowerCase();
+    const signals: Array<[RegExp, number]> = [
+      [/\b(key experts?|professional staff|experts required|required experts|staffing|personnel|team composition|consultant'?s team)\b/i, 22],
+      [/\b(terms of reference|tor|scope of services|job description|role description)\b/i, 18],
+      [/\b(job title|position|qualification|minimum education|experience|responsibilit(?:y|ies)|duties)\b/i, 12],
+      [/\b(man[-\s]?month|person[-\s]?month|schedule of staff|staff schedule|input schedule)\b/i, 10],
+      [/\b(evaluation criteria|technical proposal|special requirements?|eligibility|mandatory)\b/i, 7],
+      [/\b(feasibility study|consultancy services|request for proposal|rfp|client|employer)\b/i, 3],
+    ];
+    return signals.reduce((score, [pattern, weight]) => score + (pattern.test(lower) ? weight : 0), 0);
+  };
+
+  const blocks = (pageBlocks.length ? pageBlocks : text.split(/\n{2,}/))
+    .map((block, index) => ({ block, index, score: scoreBlock(block) }))
+    .filter((item) => item.block.length > 40);
+  const sorted = [...blocks].sort((a, b) => b.score - a.score || a.index - b.index);
+  const selected = new Map<number, string>();
+
+  for (const item of sorted) {
+    if (item.score < 3 && selected.size > 20) continue;
+    selected.set(item.index, item.block);
+    if (Array.from(selected.values()).join("\n\n").length >= maxChars * 0.72) break;
+  }
+
+  const opening = text.slice(0, Math.min(18000, text.length));
+  const priority = Array.from(selected.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, block]) => block)
+    .join("\n\n");
+  const ending = text.slice(Math.max(0, text.length - 10000));
+
+  return [
+    "--- DOCUMENT OPENING / CLIENT / TITLE / SUBMISSION CONTEXT ---",
+    opening,
+    "--- PRIORITY STAFFING / TOR / REQUIREMENTS SECTIONS FROM LONG TENDER ---",
+    priority,
+    "--- DOCUMENT ENDING / ANNEX CONTEXT ---",
+    ending,
+  ].join("\n\n").slice(0, maxChars);
+}
+
 export async function runParseTenderText(text: string): Promise<any> {
+  const promptTenderText = prepareTenderPromptText(text);
   const prompt = `You are a meticulous tender extraction engine for international consultancy and construction tenders.
   The user may provide multiple documents concatenated together for one tender. Read every document line by line and consolidate them into one structured tender object.
 
@@ -795,7 +848,7 @@ export async function runParseTenderText(text: string): Promise<any> {
   13. Team-level constraints belong in global_team_constraints, not inside a single position, unless the tender clearly assigns them to one role.
 
   Tender Text(s):
-  ${text}`;
+  ${promptTenderText}`;
   
   const parseTenderWithPrompt = async (promptText: string, models: string[]) => {
     const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({

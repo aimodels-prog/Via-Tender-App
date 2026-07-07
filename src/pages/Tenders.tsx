@@ -22,7 +22,7 @@ import {
 import { Link, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import clsx from "clsx";
-import { api, extractTextFromPDF } from "../lib/api";
+import { api, extractTenderTextFromFile } from "../lib/api";
 import { parseTenderText } from "../lib/gemini";
 import { BrandingModal } from "../components/BrandingModal";
 import { ConfirmTenderModal } from "../components/ConfirmTenderModal";
@@ -367,7 +367,7 @@ export default function Tenders() {
     try {
       let combinedText = "";
       for (let i = 0; i < fileList.length; i++) {
-        const text = await extractTextFromPDF(fileList[i]);
+        const text = await extractTenderTextFromFile(fileList[i]);
         combinedText += `--- TENDER DOC: ${fileList[i].name} ---\n${text}\n\n`;
       }
 
