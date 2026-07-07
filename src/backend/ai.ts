@@ -935,25 +935,32 @@ function mergeTenderExtractions(items: any[]) {
 
 export async function runParseTenderText(text: string): Promise<any> {
   const promptTenderText = prepareTenderPromptText(text);
-  const buildTenderPrompt = (tenderText: string, chunkNote = "") => `You are an expert tender analyst and procurement extraction specialist.
-  Your task is to READ, UNDERSTAND, and EXTRACT the tender requirements into the application schema. Do not behave like a keyword matcher. Treat the document as a real tender that may use any format, wording, table layout, annex style, or role naming convention.
-  The user may provide multiple documents concatenated together for one tender. Read the provided text line by line, understand how the document is organized, and consolidate all extracted information into one tender object.
+  const buildTenderPrompt = (tenderText: string, chunkNote = "") => `You are a 100% aggressive senior tender analyst and procurement extraction specialist.
+  Your job is to READ, UNDERSTAND, CROSS-CHECK, and EXTRACT every tender requirement needed by this application. Do not behave like a keyword matcher. Treat the document as a real tender that may use any format, wording, table layout, annex style, or role naming convention.
+  The user may provide multiple documents concatenated together for one tender. Read the provided text line by line, understand how the document is organized, and consolidate all extracted information into one complete tender object.
   ${chunkNote}
 
+  ABSOLUTE EXTRACTION CONTRACT
+  1. You must be aggressive about completeness: no real staff role, quantity, qualification, experience requirement, responsibility, special requirement, team constraint, client detail, scope detail, deadline, tender number, or project sector that appears in the source may be missed.
+  2. You must be conservative about facts: aggressive extraction means find and preserve every written fact; it never means inventing, assuming, or adding outside requirements.
+  3. If a role field is empty, it must be because that exact type of information is genuinely absent from the provided text after checking the whole chunk/document context.
+  4. Before final JSON, perform a silent completeness audit: re-check all text around every role title, table row, paragraph, annex, and requirement list to ensure each role has all available education, experience, role/duty, quantity, keyword, nationality, and sector requirements attached.
+  5. If the same requirement is written in several places, merge the richest wording into the role or tender-level field. Do not duplicate the same role.
+
   WORKING METHOD
-  1. First understand the tender as a whole: who is procuring, what service is required, what scope is being requested, what team/personnel is required, and what requirements apply to each role or to the whole team.
-  2. Identify real required staff/personnel roles by meaning, not by exact heading names. A real role is a person the bidder/consultant must provide, such as an engineer, expert, specialist, manager, advisor, coordinator, surveyor, inspector, economist, planner, or team leader.
-  3. Do not treat proposal forms, evaluation criteria, submission forms, methodology sections, company experience sections, or consultant organization sections as roles. They may contain useful context, but they are not staff positions.
-  4. When one part of the tender lists role names and another part gives details, merge them into one complete position. Never leave a role incomplete if its education, experience, responsibility, quantity, or nationality details appear elsewhere in the tender.
-  5. For every real role, extract every available role requirement into: position_title, quantity, minimum_education, minimum_years_experience, general_experience, specific_experience, role_description, required_sector_experience, mandatory_skills, required_keywords, and nationality_preference.
-  6. Understand requirement language even when labels differ. Education may be called qualification, academic qualification, degree, credentials, or minimum requirements. Role description may be called duties, tasks, responsibilities, scope, functions, assignment, or activities. Experience may be described in prose instead of labelled "general" or "specific".
-  7. If the tender has experience text but does not explicitly divide it into general and specific experience, place broad career/years requirements in general_experience and sector/project/task-specific requirements in specific_experience.
-  8. Copy the tender's requirement wording as closely as possible after OCR cleanup. Do not rewrite, summarize, or invent requirements.
-  9. Extract tender-level facts too: tender_title, tender_format, client, country, tender_number, deadline, duration, submission_type, scope_summary, project_sector, special_requirements, and global_team_constraints.
-  10. Team-level requirements belong in global_team_constraints. Role-specific requirements belong inside that role.
-  11. Missing data handling: if a value is genuinely not present anywhere in the tender text, output "" for string fields or [] for array fields. Do not output "N/A", "Not stated", "Unknown", "null", "None", or placeholders.
-  12. Source-only rule: extract only what is written in the tender. Do not infer requirements from donor, country, sector, or your outside knowledge.
-  13. Output only valid JSON matching the schema. Never include internal reasoning, commentary, "Wait", "I will", "Let me", or explanation text inside any field.
+  6. First understand the tender as a whole: who is procuring, what service is required, what scope is being requested, what deliverables are expected, what team/personnel is required, and what requirements apply to each role or to the whole team.
+  7. Identify real required staff/personnel roles by meaning, not by exact heading names. A real role is a person the bidder/consultant must provide, such as an engineer, expert, specialist, manager, advisor, coordinator, surveyor, inspector, economist, planner, or team leader.
+  8. Do not treat proposal forms, evaluation criteria, submission forms, methodology sections, company experience sections, or consultant organization sections as roles. They may contain useful context, but they are not staff positions.
+  9. When one part of the tender lists role names and another part gives details, merge them into one complete position. Never leave a role incomplete if its education, experience, responsibility, quantity, or nationality details appear elsewhere in the tender.
+  10. For every real role, extract every available role requirement into: position_title, quantity, minimum_education, minimum_years_experience, general_experience, specific_experience, role_description, required_sector_experience, mandatory_skills, required_keywords, and nationality_preference.
+  11. Understand requirement language even when labels differ. Education may be called qualification, academic qualification, degree, credentials, or minimum requirements. Role description may be called duties, tasks, responsibilities, scope, functions, assignment, activities, expected services, or job description. Experience may be described in prose instead of labelled "general" or "specific".
+  12. If the tender has experience text but does not explicitly divide it into general and specific experience, place broad career/years/professional requirements in general_experience and sector/project/task-specific requirements in specific_experience.
+  13. Copy the tender's requirement wording as closely as possible after OCR cleanup. Do not rewrite, summarize, or invent requirements.
+  14. Extract tender-level facts too: tender_title, tender_format, client, country, tender_number, deadline, duration, submission_type, scope_summary, project_sector, special_requirements, and global_team_constraints.
+  15. Team-level requirements belong in global_team_constraints. Role-specific requirements belong inside that role.
+  16. Missing data handling: if a value is genuinely not present anywhere in the tender text, output "" for string fields or [] for array fields. Do not output "N/A", "Not stated", "Unknown", "null", "None", or placeholders.
+  17. Source-only rule: extract only what is written in the tender. Do not infer requirements from donor, country, sector, or your outside knowledge.
+  18. Output only valid JSON matching the schema. Never include internal reasoning, commentary, "Wait", "I will", "Let me", or explanation text inside any field.
 
   Tender Text(s):
   ${tenderText}`;
@@ -1011,7 +1018,7 @@ export async function runParseTenderText(text: string): Promise<any> {
 
   TENDER EXTRACTION REPAIR PASS:
   The first extraction had these issues: ${validation.issues.join("; ")}.
-  Re-read every tender line as a tender analyst, understand which text belongs to each real staff role, and repair missing positions, role descriptions, education requirements, general experience, specific experience, scope, and explicit constraints that are present in the source. Use meaning and document context, not heading names only. Do not invent anything. Missing source data must remain empty string or empty array.`;
+  Re-read every tender line as a 100% aggressive tender analyst. For every empty or weak role field, search the whole provided text and nearby context for wording that belongs to that role: education/qualification, professional years, sector/project-specific experience, duties/tasks/responsibilities, quantity, nationality, required skills, and keywords. Repair missing positions, role descriptions, education requirements, general experience, specific experience, scope, and explicit constraints that are present in the source. Use meaning and document context, not heading names only. Do not invent anything. Missing source data must remain empty string or empty array.`;
     try {
       const retryParsed = await parseTenderWithPrompt(retryPrompt, ["gemini-3.1-pro-preview"]);
       const retryTender = postProcessTenderExtraction(retryParsed, text);
