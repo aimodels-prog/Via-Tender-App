@@ -72,6 +72,31 @@ async function main() {
   console.log("Tender role facts:", tenderFacts.positions.map((item) => item.position_title));
   if (tenderFacts.positions.length < 3) throw new Error("Expected tender role recovery to find at least 3 positions.");
 
+  const looseTenderText = `
+    Technical Proposal Request
+    Required Positions
+    - Senior Transport Economist (1)
+      Education: Master's degree in Economics, Transport Planning, or related field.
+      General Experience: Minimum 12 years of professional experience in transport economics.
+      Specific Experience: At least 5 years preparing feasibility studies and economic analysis for road infrastructure projects.
+      Responsibilities: Lead economic evaluation, traffic demand analysis, benefit-cost analysis, and reporting.
+    - Environmental Safeguards Specialist - Qty: 1
+      Qualification: Degree in Environmental Science or Environmental Engineering.
+      Experience: Minimum 10 years in environmental safeguards, ESIA, ESMP, and donor-funded infrastructure projects.
+      Duties: Review safeguards documentation, supervise compliance, and prepare mitigation reports.
+    - Social Development / Resettlement Expert
+      Academic qualification: Sociology, Social Development, or related discipline.
+      Specific experience: RAP preparation, stakeholder engagement, grievance redress, and community consultations.
+  `;
+  const looseTenderFacts = extractUniversalTenderFacts(looseTenderText);
+  const looseTitles = looseTenderFacts.positions.map((item) => item.position_title);
+  console.log("Loose tender role facts:", looseTitles);
+  ["Senior Transport Economist", "Environmental Safeguards Specialist", "Social Development / Resettlement Expert"].forEach((title) => {
+    if (!looseTitles.includes(title)) throw new Error(`Expected loose tender recovery to include ${title}.`);
+  });
+  const environmental = looseTenderFacts.positions.find((item) => item.position_title === "Environmental Safeguards Specialist");
+  if (!environmental?.role_description?.includes("Review safeguards")) throw new Error("Expected loose tender recovery to capture role duties.");
+
   const torPaths = [
     "C:/Users/Dell/Downloads/TOR 2024.OM.RFP.49_1.pdf",
     "C:/Users/Dell/Downloads/TOR 2024.OM.RFP.49_2.pdf",

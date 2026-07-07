@@ -528,7 +528,7 @@ function cleanTenderLine(value: any) {
 function normalizePositionTitle(value: string) {
   return cleanTenderLine(value)
     .replace(/^[\d.)\-\s]+/, "")
-    .replace(/\b(no\.?|number|qty|personnel|staff|expert|key expert|position|role)\b\s*:?\s*/gi, "")
+    .replace(/^(?:no\.?|number|qty|personnel|staff|key expert|expert|position|role|designation)\s*:?\s*/i, "")
     .replace(/\s*\(\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*\)\s*$/i, "")
     .replace(/\s*[-–—:]\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*$/i, "")
     .replace(/\s+(?:qty|quantity|no\.?|number)\s*[:\-]?\s*\d{1,2}\s*$/i, "")
@@ -540,7 +540,9 @@ function normalizePositionTitle(value: string) {
 function isLikelyStaffRoleTitle(value: string) {
   const title = normalizePositionTitle(value);
   if (!title || title.length < 4 || title.length > 90) return false;
+  if (!/^[A-Z]/.test(title)) return false;
   if (/^(scope|background|objective|deliverables|submission|evaluation|financial|technical|appendix|annex|table|minimum|general|specific|description)$/i.test(title)) return false;
+  if (/^(consultant engineer|consulting engineer)$/i.test(title)) return false;
   return /\b(manager|engineer|expert|specialist|consultant|leader|director|coordinator|surveyor|inspector|architect|designer|planner|scheduler|advisor|trainer|analyst|officer|supervisor|controller|technician|draftsman|economist|sociologist|environmentalist|hydrologist|geologist|qa\/qc|hse|team leader|project manager|resident engineer)\b/i.test(title);
 }
 
@@ -602,6 +604,15 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
   const universalFacts = extractUniversalTenderFacts(rawText);
   const recovered = universalFacts.positions.length ? universalFacts.positions : recoverTenderPositionsFromText(rawText);
   const byTitle = new Map<string, any>();
+  const bestText = (current: any, next: any) => {
+    const currentText = cleanTenderLine(current);
+    const nextText = cleanTenderLine(next);
+    if (!currentText) return nextText;
+    if (!nextText) return currentText;
+    return nextText.length > currentText.length * 1.25 ? nextText : currentText;
+  };
+  const bestArray = (current: any, next: any) =>
+    Array.from(new Set([...(Array.isArray(current) ? current : []), ...(Array.isArray(next) ? next : [])].filter(Boolean)));
 
   [...existing, ...recovered].forEach((position) => {
     const title = normalizePositionTitle(position.position_title || position.title || position.role || "");
@@ -613,15 +624,15 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
       ...current,
       position_title: current.position_title || title,
       quantity: current.quantity || position.quantity || 1,
-      minimum_education: current.minimum_education || position.minimum_education || "",
+      minimum_education: bestText(current.minimum_education, position.minimum_education),
       minimum_years_experience: current.minimum_years_experience || position.minimum_years_experience,
-      general_experience: current.general_experience || position.general_experience || "",
-      specific_experience: current.specific_experience || position.specific_experience || "",
-      role_description: current.role_description || position.role_description || position.description || "",
-      required_sector_experience: current.required_sector_experience || position.required_sector_experience || [],
-      mandatory_skills: current.mandatory_skills || position.mandatory_skills || [],
-      required_keywords: Array.from(new Set([...(current.required_keywords || []), ...(position.required_keywords || [])])),
-      nationality_preference: current.nationality_preference || position.nationality_preference || "",
+      general_experience: bestText(current.general_experience, position.general_experience),
+      specific_experience: bestText(current.specific_experience, position.specific_experience),
+      role_description: bestText(current.role_description, position.role_description || position.description),
+      required_sector_experience: bestArray(current.required_sector_experience, position.required_sector_experience),
+      mandatory_skills: bestArray(current.mandatory_skills, position.mandatory_skills),
+      required_keywords: bestArray(current.required_keywords, position.required_keywords),
+      nationality_preference: bestText(current.nationality_preference, position.nationality_preference),
       recovered_from_text: Boolean(current.recovered_from_text || position.recovered_from_text),
     });
   });

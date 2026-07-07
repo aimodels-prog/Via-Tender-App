@@ -336,7 +336,7 @@ function normalizePositionTitle(value: string) {
     .replace(/^job\s+title\s*/i, "")
     .replace(/^requirements in construction phase\s+/i, "")
     .replace(/\s*\(\s*omani only\s*\)\s*$/i, "")
-    .replace(/\b(no\.?|number|qty|personnel|staff|expert|key expert|position|role)\b\s*:?\s*/gi, "")
+    .replace(/^(?:no\.?|number|qty|personnel|staff|key expert|expert|position|role|designation)\s*:?\s*/i, "")
     .replace(/\s*\(\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*\)\s*$/i, "")
     .replace(/\s*[-–—:]\s*\d+\s*(?:nos?\.?|persons?|staff)?\s*$/i, "")
     .replace(/\s+(?:qty|quantity|no\.?|number)\s*[:\-]?\s*\d{1,2}\s*$/i, "")
@@ -358,7 +358,9 @@ function positionKey(value: string) {
 function isLikelyTenderPosition(value: string) {
   const title = normalizePositionTitle(value);
   if (!title || title.length < 4 || title.length > 90) return false;
+  if (!/^[A-Z]/.test(title)) return false;
   if (/^(scope|background|objective|deliverables|submission|evaluation|financial|technical|appendix|annex|table|minimum|general|specific|description)$/i.test(title)) return false;
+  if (/^(consultant engineer|consulting engineer)$/i.test(title)) return false;
   return /\b(manager|engineer|expert|specialist|consultant|leader|director|coordinator|surveyor|inspector|architect|designer|planner|scheduler|advisor|trainer|analyst|officer|supervisor|controller|technician|draftsman|economist|sociologist|environmentalist|hydrologist|geologist|qa\/qc|hse|team leader|project manager|resident engineer)\b/i.test(title);
 }
 
@@ -369,6 +371,24 @@ function extractQuantity(line: string) {
     line.match(/\b(\d{1,2})\s*(?:nos?\.?|persons?|staff)\b/i) ||
     line.match(/^\s*(\d{1,2})\s+[-.)]?\s+[A-Za-z]/);
   return match ? Number(match[1]) : 1;
+}
+
+function buildTenderPositionFromBlock(title: string, line: string, nearby: string, source: string) {
+  return {
+    position_title: title,
+    quantity: extractQuantity(line),
+    minimum_education: clean(nearby.match(/\b(?:minimum\s+)?(?:education|qualification|academic qualification)\s*[:\-]?\s*(.+?)(?=\b(?:experience|general experience|specific experience|role|responsibil|duties|tasks|requirement|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
+    minimum_years_experience: Number(nearby.match(/\b(?:minimum|min\.?|at least)\s+(\d{1,2})\+?\s+years?\b/i)?.[1] || nearby.match(/\b(\d{1,2})\+?\s+years?\s+(?:of\s+)?(?:relevant|professional|general|specific)?\s*experience\b/i)?.[1] || 0) || undefined,
+    general_experience: clean(nearby.match(/\bgeneral experience\s*[:\-]?\s*(.+?)(?=\bspecific experience\b|\b(?:role|responsibil|duties|tasks|minimum|education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
+    specific_experience: clean(nearby.match(/\bspecific experience\s*[:\-]?\s*(.+?)(?=\b(?:role|responsibil|duties|tasks|minimum|education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
+    role_description: clean(nearby.match(/\b(?:role\s*&\s*responsibilities|role description|responsibilities|tasks|duties|scope of work)\s*[:\-]?\s*(.+?)(?=\b(?:general experience|specific experience|minimum|education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
+    required_sector_experience: [],
+    mandatory_skills: Array.from(new Set((nearby.match(/\b(?:FIDIC|AutoCAD|Primavera|BIM|GIS|QA\/QC|HSE|PMP|laboratory|asphalt|earthworks?|survey|quantity|document control|contract management|site supervision)\b/gi) || []).map((item) => item.trim()))),
+    required_keywords: Array.from(new Set((nearby.match(/\b(?:roads?|bridges?|water|wastewater|buildings?|infrastructure|construction|supervision|design|drainage|pavement|utilities|geotechnical|materials?|laboratory|asphalt|earthworks?|survey|quantity|document control)\b/gi) || []).map((item) => item.trim()))),
+    nationality_preference: /\bomani only\b|\bnational only\b/i.test(`${line} ${nearby}`) ? "Omani only" : "",
+    recovered_from_text: true,
+    recovery_source: source,
+  };
 }
 
 function extractJobTitlePositions(lines: TextLine[]) {
@@ -394,19 +414,9 @@ function extractJobTitlePositions(lines: TextLine[]) {
     }
     const block = blockLines.join(" ");
     positions.push({
-      position_title: title,
+      ...buildTenderPositionFromBlock(title, line.text, block, "job_title_section"),
       quantity: 1,
-      minimum_education: clean(block.match(/\bQualification\s+(.+?)(?=\bExperience\b|\bRole\s*&\s*Responsibilities\b|$)/i)?.[1] || ""),
-      minimum_years_experience: Number(block.match(/\bminimum\s+(\d{1,2})\s+years?\b/i)?.[1] || 0) || undefined,
-      general_experience: clean(block.match(/\bExperience\s+(.+?)(?=\bRole\s*&\s*Responsibilities\b|$)/i)?.[1] || ""),
-      specific_experience: clean(block.match(/\bExperience\s+(.+?)(?=\bRole\s*&\s*Responsibilities\b|$)/i)?.[1] || ""),
-      role_description: clean(block.match(/\bRole\s*&\s*Responsibilities\s*(?:\(but not limited to\))?\s*(.+)$/i)?.[1] || ""),
-      required_sector_experience: [],
-      mandatory_skills: [],
-      required_keywords: Array.from(new Set((block.match(/\b(?:FIDIC|AutoCAD|Primavera|BIM|GIS|QA\/QC|HSE|PMP|roads?|bridges?|laboratory|asphalt|earthworks?|survey|quantity|document control)\b/gi) || []).map((item) => item.trim()))),
       nationality_preference: /\bomani only\b/i.test(titleMatch[1]) ? "Omani only" : "",
-      recovered_from_text: true,
-      recovery_source: "job_title_section",
     });
   });
   return positions;
@@ -449,13 +459,56 @@ function extractPersonnelTablePositions(lines: TextLine[]) {
   return positions;
 }
 
+function extractLooseRoleListPositions(lines: TextLine[]) {
+  const positions: any[] = [];
+  const seen = new Set<string>();
+  const sectionHeadingPattern = /\b(key experts?|staff|personnel|team composition|professional staff|experts required|required positions?|required experts?|manpower|schedule of staff|resource persons?|project team|consultant'?s team)\b/i;
+  const explicitRolePattern =
+    /\b(?:position|role|staff|expert|key expert|job title|designation)\s*[:\-]\s*(.+)$/i;
+  const listRolePattern =
+    /^(?:\d{1,2}[.)]\s*|[-\u2022]\s*)?([A-Za-z][A-Za-z /&().-]{3,90}?(?:Manager|Engineer|Expert|Specialist|Consultant|Leader|Director|Coordinator|Surveyor|Inspector|Architect|Designer|Planner|Scheduler|Advisor|Trainer|Analyst|Officer|Supervisor|Controller|Technician|Draftsman|Economist|Sociologist|Environmentalist|Hydrologist|Geologist))(?:\s*(?:-|–|—|:|\()\s*(?:qty|quantity|no\.?|number|nos?\.?|persons?|staff)?\s*\d{1,2}|\s+\d{1,2}\s*(?:nos?\.?|persons?|staff)?)?/i;
+  let inRoleSectionUntil = -1;
+
+  lines.forEach((line, index) => {
+    if (sectionHeadingPattern.test(line.text)) {
+      inRoleSectionUntil = Math.max(inRoleSectionUntil, index + 80);
+    }
+    const inRoleSection = index <= inRoleSectionUntil;
+    const compact = line.text;
+    const explicit = compact.match(explicitRolePattern)?.[1] || "";
+    const wordCount = compact.split(/\s+/).length;
+    const listLike = /^(?:\d{1,2}[.)]\s*|[-\u2022]\s*)/.test(compact) || /\b(?:qty|no\.?|number|nos?\.?|persons?|staff)\b/i.test(compact) || wordCount <= 7;
+    const listMatch = inRoleSection && listLike && compact.length <= 140 ? compact.match(listRolePattern)?.[1] || "" : "";
+    const title = normalizePositionTitle(explicit || listMatch);
+    if (!isLikelyTenderPosition(title)) return;
+    const key = positionKey(title);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+
+    const blockLines = [compact];
+    for (let i = index + 1; i < Math.min(lines.length, index + 30); i++) {
+      const next = lines[i].text;
+      if (sectionHeadingPattern.test(next) && i > index + 2) break;
+      if (next.match(explicitRolePattern) || (inRoleSection && next.match(listRolePattern) && /\b(?:qualification|experience|responsibil|duties|tasks)\b/i.test(blockLines.join(" ")))) break;
+      blockLines.push(next);
+    }
+
+    positions.push(buildTenderPositionFromBlock(title, compact, blockLines.join(" "), "loose_role_section"));
+  });
+  return positions;
+}
+
 export function extractUniversalTenderFacts(rawText: string): UniversalTenderFacts {
   const lines = toTextLines(reconstructTenderLineBreaks(rawText));
   const positions: any[] = [];
   const sourceEvidence: SourceEvidence[] = [];
   const seen = new Set<string>();
 
-  const structuredPositions = [...extractPersonnelTablePositions(lines), ...extractJobTitlePositions(lines)];
+  const structuredPositions = [
+    ...extractPersonnelTablePositions(lines),
+    ...extractJobTitlePositions(lines),
+    ...extractLooseRoleListPositions(lines),
+  ];
   if (structuredPositions.length) {
     const byTitle = new Map<string, any>();
     structuredPositions.forEach((position) => {
@@ -471,8 +524,11 @@ export function extractUniversalTenderFacts(rawText: string): UniversalTenderFac
         general_experience: current.general_experience || position.general_experience || "",
         specific_experience: current.specific_experience || position.specific_experience || "",
         role_description: current.role_description || position.role_description || "",
+        required_sector_experience: Array.from(new Set([...(current.required_sector_experience || []), ...(position.required_sector_experience || [])])),
+        mandatory_skills: Array.from(new Set([...(current.mandatory_skills || []), ...(position.mandatory_skills || [])])),
         required_keywords: Array.from(new Set([...(current.required_keywords || []), ...(position.required_keywords || [])])),
         nationality_preference: current.nationality_preference || position.nationality_preference || "",
+        recovery_source: Array.from(new Set([current.recovery_source, position.recovery_source].filter(Boolean))).join(","),
       });
     });
     const recovered = Array.from(byTitle.values());
