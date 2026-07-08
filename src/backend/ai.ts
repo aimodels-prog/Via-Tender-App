@@ -933,6 +933,39 @@ function mergeTenderExtractions(items: any[]) {
   return normalizeTenderRecord(sanitizeExtractedValues(merged));
 }
 
+function missingTenderRoleDetailCount(position: any) {
+  const empty = (value: any) => !String(value || "").trim();
+  return [
+    empty(position.minimum_education),
+    empty(position.role_description),
+    empty(position.general_experience),
+    empty(position.specific_experience),
+  ].filter(Boolean).length;
+}
+
+function extractTenderRoleContext(rawText: string, title: string) {
+  const lines = String(rawText || "")
+    .replace(/\r/g, "\n")
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const titleWords = normalizedTitle.split(/\s+/).filter((word) => word.length > 2);
+  const hitIndexes = lines
+    .map((line, index) => ({ line, index, normalized: line.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() }))
+    .filter(({ normalized }) => normalized.includes(normalizedTitle) || titleWords.every((word) => normalized.includes(word)))
+    .map(({ index }) => index);
+
+  if (!hitIndexes.length) return "";
+  const windows: string[] = [];
+  for (const index of hitIndexes.slice(0, 5)) {
+    const start = Math.max(0, index - 35);
+    const end = Math.min(lines.length, index + 80);
+    windows.push(lines.slice(start, end).join("\n"));
+  }
+  return Array.from(new Set(windows)).join("\n\n--- NEXT MATCH CONTEXT ---\n\n").slice(0, 14000);
+}
+
 export async function runParseTenderText(text: string): Promise<any> {
   const promptTenderText = prepareTenderPromptText(text);
   const buildTenderPrompt = (tenderText: string, chunkNote = "") => `You are a 100% aggressive senior tender analyst and procurement extraction specialist.
@@ -987,6 +1020,70 @@ export async function runParseTenderText(text: string): Promise<any> {
     }
   };
 
+  const repairTenderRoleDetails = async (currentTender: any) => {
+    const normalized = normalizeTenderRecord(currentTender || {});
+    const incomplete = (normalized.positions || [])
+      .filter((position: any) => missingTenderRoleDetailCount(position) > 0)
+      .map((position: any) => ({
+        position,
+        missingCount: missingTenderRoleDetailCount(position),
+        context: extractTenderRoleContext(text, position.position_title),
+      }))
+      .filter((item: any) => item.context)
+      .sort((a: any, b: any) => b.missingCount - a.missingCount);
+
+    if (!incomplete.length) return normalized;
+
+    const repairedTenderPieces: any[] = [normalized];
+    const batchSize = 8;
+    for (let start = 0; start < incomplete.length; start += batchSize) {
+      const batch = incomplete.slice(start, start + batchSize);
+      const repairPrompt = `You are repairing tender role details before the tender is shown to the user.
+      Use ONLY the source context provided below. Do not invent anything.
+      For each listed position, extract and fill every available:
+      - minimum_education
+      - minimum_years_experience
+      - general_experience
+      - specific_experience
+      - role_description
+      - required_sector_experience
+      - mandatory_skills
+      - required_keywords
+      - nationality_preference
+
+      If the context contains broad years/professional experience, put it in general_experience.
+      If the context contains sector/project/task-specific experience, put it in specific_experience.
+      If the context contains duties/tasks/responsibilities/scope/functions, put it in role_description.
+      If the context contains qualification/degree/education, put it in minimum_education.
+      Preserve the tender wording as much as possible after OCR cleanup.
+      Return valid JSON matching the tender schema with positions[] containing ONLY repaired versions of these listed positions.
+
+      POSITIONS TO REPAIR:
+      ${JSON.stringify(batch.map((item: any) => ({
+        position_title: item.position.position_title,
+        current: {
+          minimum_education: item.position.minimum_education || "",
+          minimum_years_experience: item.position.minimum_years_experience || "",
+          general_experience: item.position.general_experience || "",
+          specific_experience: item.position.specific_experience || "",
+          role_description: item.position.role_description || "",
+        },
+      })), null, 2)}
+
+      SOURCE CONTEXT BY POSITION:
+      ${batch.map((item: any) => `--- POSITION: ${item.position.position_title} ---\n${item.context}`).join("\n\n")}`;
+
+      try {
+        const repaired = await parseTenderWithPrompt(repairPrompt, ["gemini-3.1-pro-preview", "gemini-3.5-flash"]);
+        repairedTenderPieces.push(repaired);
+      } catch (error: any) {
+        console.warn("[TENDER EXTRACTION] Role detail repair batch failed; continuing.", error?.message || error);
+      }
+    }
+
+    return postProcessTenderExtraction(mergeTenderExtractions(repairedTenderPieces), text);
+  };
+
   const chunks = prepareTenderPromptChunks(text);
   let parsed: any;
   if (chunks.length > 1) {
@@ -1032,6 +1129,10 @@ export async function runParseTenderText(text: string): Promise<any> {
       console.warn("[TENDER EXTRACTION] Repair retry failed; keeping first extraction.", error?.message || error);
     }
   }
+
+  tender = await repairTenderRoleDetails(tender);
+  validation = validateExtractedTender(tender);
+  logExtractionValidation("TENDER", tender.tender_title || tender.name || "Role-detail repaired tender", validation);
 
   return sanitizeExtractedValues(tender);
 }
