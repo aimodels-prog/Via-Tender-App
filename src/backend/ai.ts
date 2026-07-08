@@ -1020,6 +1020,20 @@ export async function runParseTenderText(text: string): Promise<any> {
     }
   };
 
+  const buildRolesOnlyPrompt = (tenderText: string, chunkNote = "") => `You are Stage 1 of a tender extraction pipeline: REAL STAFF ROLE IDENTIFICATION ONLY.
+  Read and understand the tender text. Extract ONLY actual personnel/staff/key expert roles that the bidder or consultant must provide.
+  ${chunkNote}
+
+  Rules:
+  1. Include every real required role/personnel/staff/key expert title visible in the text.
+  2. Reject proposal forms, instructions, contract clauses, appendices, evaluation criteria, company experience sections, consultant organization sections, signature blocks, code of conduct clauses, payment clauses, and generic references to "the Consultant" or "Expert".
+  3. If quantity is visible, extract it. If not visible, use 1.
+  4. Do not extract role details in this stage unless they are on the same line. Details are extracted in Stage 2.
+  5. Return valid JSON matching the tender schema. positions[] should contain the real roles only.
+
+  Tender Text:
+  ${tenderText}`;
+
   const repairTenderRoleDetails = async (currentTender: any) => {
     const normalized = normalizeTenderRecord(currentTender || {});
     const incomplete = (normalized.positions || [])
@@ -1088,6 +1102,17 @@ export async function runParseTenderText(text: string): Promise<any> {
   let parsed: any;
   if (chunks.length > 1) {
     const longTenderModels = ["gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3.5-flash"];
+    const roleOnlyResults = await Promise.allSettled(
+      chunks.map((chunk, index) =>
+        parseTenderWithPrompt(
+          buildRolesOnlyPrompt(
+            chunk,
+            `This is role-identification chunk ${index + 1} of ${chunks.length}. Extract only real staff/personnel roles visible in this chunk.`,
+          ),
+          longTenderModels,
+        ),
+      ),
+    );
     const chunkResults = await Promise.allSettled(
       chunks.map((chunk, index) =>
         parseTenderWithPrompt(
@@ -1099,12 +1124,20 @@ export async function runParseTenderText(text: string): Promise<any> {
         ),
       ),
     );
-    const fulfilled = chunkResults
+    const fulfilled = [...roleOnlyResults, ...chunkResults]
       .filter((result): result is PromiseFulfilledResult<any> => result.status === "fulfilled")
       .map((result) => result.value);
     parsed = fulfilled.length ? mergeTenderExtractions(fulfilled) : await parseTenderWithPrompt(prompt, longTenderModels);
   } else {
-    parsed = await parseTenderWithPrompt(prompt, ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"]);
+    const models = ["gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3.5-flash"];
+    const [rolesOnly, fullExtraction] = await Promise.allSettled([
+      parseTenderWithPrompt(buildRolesOnlyPrompt(promptTenderText), models),
+      parseTenderWithPrompt(prompt, models),
+    ]);
+    const fulfilled = [rolesOnly, fullExtraction]
+      .filter((result): result is PromiseFulfilledResult<any> => result.status === "fulfilled")
+      .map((result) => result.value);
+    parsed = fulfilled.length ? mergeTenderExtractions(fulfilled) : {};
   }
   let tender = postProcessTenderExtraction(parsed, text);
   let validation = validateExtractedTender(tender);
@@ -1133,6 +1166,16 @@ export async function runParseTenderText(text: string): Promise<any> {
   tender = await repairTenderRoleDetails(tender);
   validation = validateExtractedTender(tender);
   logExtractionValidation("TENDER", tender.tender_title || tender.name || "Role-detail repaired tender", validation);
+  tender.extraction_audit = {
+    ...(tender.extraction_audit || {}),
+    pipeline: "roles-only + full extraction + role-detail repair + cleanup",
+    stage1RolesOnly: true,
+    stage2RoleDetailRepair: true,
+    stage3Validation: true,
+    stage4FinalCleanup: true,
+    finalPositionCount: Array.isArray(tender.positions) ? tender.positions.length : 0,
+    finalValidationIssues: validation.issues,
+  };
 
   return sanitizeExtractedValues(tender);
 }

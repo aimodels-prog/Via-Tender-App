@@ -919,7 +919,16 @@ async function startServer() {
   app.post("/api/parse-tender", ...aiRoute, async (req, res) => {
     try {
       const { runParseTenderText } = await import("./src/backend/ai.ts");
-      const tender = await runParseTenderText(req.body.text);
+      const originalTenderText = String(req.body.text || "");
+      const tender = await runParseTenderText(originalTenderText);
+      tender.original_tender_text = originalTenderText;
+      tender.original_tender_text_length = originalTenderText.length;
+      tender.extraction_audit = {
+        ...(tender.extraction_audit || {}),
+        originalTenderTextStored: true,
+        originalTenderTextLength: originalTenderText.length,
+        extractedAt: new Date().toISOString(),
+      };
       res.json({ tender });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
