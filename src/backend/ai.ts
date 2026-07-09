@@ -738,6 +738,8 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
   const existing = Array.isArray(tender.positions) ? tender.positions : [];
   const universalFacts = extractUniversalTenderFacts(rawText);
   const recovered = universalFacts.positions.length ? universalFacts.positions : recoverTenderPositionsFromText(rawText);
+  const hasAuthoritativeRoleTable =
+    recovered.filter((position: any) => String(position.recovery_source || "").includes("key_expert_position_table")).length >= 3;
   const byTitle = new Map<string, any>();
   const bestText = (current: any, next: any) => {
     const currentText = cleanTenderLine(current);
@@ -749,10 +751,12 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
   const bestArray = (current: any, next: any) =>
     Array.from(new Set([...(Array.isArray(current) ? current : []), ...(Array.isArray(next) ? next : [])].filter(Boolean)));
 
-  [...existing, ...recovered].forEach((position) => {
+  const sourcePositions = hasAuthoritativeRoleTable ? [...recovered, ...existing] : [...existing, ...recovered];
+  sourcePositions.forEach((position) => {
     const title = normalizePositionTitle(position.position_title || position.title || position.role || "");
     if (!title) return;
     const key = title.toLowerCase();
+    if (hasAuthoritativeRoleTable && !recovered.some((item: any) => normalizePositionTitle(item.position_title || "").toLowerCase() === key)) return;
     const current = byTitle.get(key) || {};
     byTitle.set(key, {
       ...position,

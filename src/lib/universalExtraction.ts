@@ -509,6 +509,59 @@ function extractPersonnelTablePositions(lines: TextLine[]) {
   return positions;
 }
 
+function extractKeyExpertPositionRows(lines: TextLine[]) {
+  const positions: any[] = [];
+  const seen = new Set<string>();
+  const positionRowPattern = /^\s*(\d{1,2})\)?\s+Position\s+K[-\s]?\d+[A-Z]?\s*:?\s*(.+)$/i;
+  const nextPositionPattern = /^\s*\d{1,2}\)?\s+Position\s+K[-\s]?\d+[A-Z]?\s*:?/i;
+  const scorePattern = /\s+\d+(?:\.\d+)?\s*points?.*$/i;
+  const stopPattern = /^(?:total|official use only|the number of points|sub-criteria|general qualifications|adequacy for|relevant experience|transfer of knowledge|participation by nationals)\b/i;
+
+  lines.forEach((line, index) => {
+    const match = line.text.match(positionRowPattern);
+    if (!match) return;
+
+    let titleText = clean(match[2]).replace(scorePattern, "").trim();
+    for (let offset = 1; offset <= 3; offset++) {
+      const next = clean(lines[index + offset]?.text || "");
+      if (!next || nextPositionPattern.test(next) || stopPattern.test(next)) break;
+
+      const currentTitle = normalizePositionTitle(titleText);
+      const needsContinuation = /(?:&|\/|-)$/.test(titleText) || !isLikelyTenderPosition(currentTitle);
+      const usefulContinuation =
+        /^[a-z]/.test(next) ||
+        /\b(?:engineer|expert|specialist|surveyor|planner|architect|economist|analyst|leader|manager)\b/i.test(next);
+      if (!needsContinuation || !usefulContinuation || next.length > 90) break;
+      titleText = `${titleText} ${next.replace(scorePattern, "").trim()}`.trim();
+    }
+
+    const title = normalizePositionTitle(titleText);
+    if (!isLikelyTenderPosition(title)) return;
+    const key = positionKey(title);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    positions.push({
+      position_title: title,
+      quantity: 1,
+      minimum_education: "",
+      minimum_years_experience: undefined,
+      general_experience: "",
+      specific_experience: "",
+      role_description: "",
+      required_sector_experience: [],
+      mandatory_skills: [],
+      required_keywords: [],
+      nationality_preference: "",
+      recovered_from_text: true,
+      recovery_source: "key_expert_position_table",
+      source_line_number: line.number,
+      source_position_number: Number(match[1]),
+    });
+  });
+
+  return positions;
+}
+
 function extractLooseRoleListPositions(lines: TextLine[]) {
   const positions: any[] = [];
   const seen = new Set<string>();
@@ -554,6 +607,20 @@ export function extractUniversalTenderFacts(rawText: string): UniversalTenderFac
   const positions: any[] = [];
   const sourceEvidence: SourceEvidence[] = [];
   const seen = new Set<string>();
+  const keyExpertRows = extractKeyExpertPositionRows(lines);
+
+  if (keyExpertRows.length >= 3) {
+    const recovered = enrichPositionsFromBlocks(keyExpertRows, lines);
+    return {
+      positions: recovered,
+      sourceEvidence: recovered.map((position) => ({
+        field: "tender.positions",
+        value: position.position_title,
+        lineNumber: position.source_line_number || 0,
+        line: position.position_title,
+      })),
+    };
+  }
 
   const structuredPositions = [
     ...extractPersonnelTablePositions(lines),
