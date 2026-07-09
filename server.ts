@@ -772,6 +772,12 @@ async function startServer() {
       created_at: tender.created_at || new Date().toISOString(),
       positions: (tender.positions || []).map((p: any, i: number) => ({ ...p, id: p.id || `pos_${Date.now()}_${i}` })),
     });
+    if ((!Array.isArray(data.positions) || data.positions.length === 0) && !String(data.tender_title || data.name || data.client || "").trim()) {
+      return res.status(400).json({ error: "Cannot save an empty tender extraction. Please re-upload and wait for parsing to complete." });
+    }
+    if (!Array.isArray(data.positions) || data.positions.length === 0) {
+      return res.status(400).json({ error: "Cannot save tender because no positions were extracted." });
+    }
     await query(
       `insert into tenders (id, tender_title, client, status, deadline, data)
        values ($1,$2,$3,$4,$5,$6::jsonb)`,

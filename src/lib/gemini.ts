@@ -95,7 +95,16 @@ export async function parseTenderText(text: string): Promise<any> {
         throw new Error(pollData.error || "Failed to check tender parsing status");
       }
       if (pollError) throw new Error(`Tender parsing status failed: ${pollError}`);
-      if (pollData.status === 'completed') return pollData.tender || {};
+      if (pollData.status === 'completed') {
+        const tender = pollData.tender || {};
+        if (!String(tender.tender_title || tender.name || tender.client || '').trim() && !Array.isArray(tender.positions)) {
+          throw new Error("Tender parsing completed but returned no tender data.");
+        }
+        if (Array.isArray(tender.positions) && tender.positions.length === 0 && !String(tender.tender_title || tender.name || tender.client || '').trim()) {
+          throw new Error("Tender parsing completed but found no title, client, or positions.");
+        }
+        return tender;
+      }
       if (pollData.status === 'failed') throw new Error(pollData.error || "Tender parsing failed.");
     }
     throw new Error("Tender parsing is still running after 20 minutes. Please check the tender again later.");

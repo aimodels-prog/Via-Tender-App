@@ -82,6 +82,14 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
       alert("Internal Code is required.");
       return;
     }
+    if (!String(editedTender.name || editedTender.tender_title || editedTender.client || '').trim() && (!Array.isArray(editedTender.positions) || editedTender.positions.length === 0)) {
+      alert("Tender extraction is empty. Please re-upload the tender and wait for extraction to complete before saving.");
+      return;
+    }
+    if (!Array.isArray(editedTender.positions) || editedTender.positions.length === 0) {
+      alert("No tender positions were extracted. Please re-upload the tender and wait for extraction to complete before saving.");
+      return;
+    }
     setIsSaving(true);
     await onSave(editedTender);
     setIsSaving(false);
@@ -351,7 +359,7 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
           </button>
           <button 
             onClick={handleSave}
-            disabled={isSaving}
+            disabled={isSaving || !Array.isArray(editedTender.positions) || editedTender.positions.length === 0}
             className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-medium bg-[#2563eb] hover:bg-blue-700 text-white transition-colors shadow-sm disabled:opacity-50"
           >
             {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}

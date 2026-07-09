@@ -6,6 +6,15 @@ import { api } from "../lib/api";
 export function GlobalModals() {
   const { pendingTender, setPendingTender, updateTask } = useTasks();
 
+  React.useEffect(() => {
+    if (!pendingTender) return;
+    const hasIdentity = String(pendingTender.name || pendingTender.tender_title || pendingTender.client || "").trim();
+    const hasPositions = Array.isArray(pendingTender.positions) && pendingTender.positions.length > 0;
+    if (!hasIdentity && !hasPositions) {
+      void setPendingTender(null);
+    }
+  }, [pendingTender, setPendingTender]);
+
   const confirmSaveTender = async (confirmedTender: any) => {
     try {
       const taskId = confirmedTender._taskId;

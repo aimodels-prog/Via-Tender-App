@@ -50,6 +50,24 @@ export function cleanTenderRequirementText(value: any) {
   return deduped.join(" ").slice(0, 1800).trim();
 }
 
+function cleanTenderTitle(value: any) {
+  let title = cleanTenderRequirementText(value)
+    .replace(/\bNote:\s*.+$/i, "")
+    .replace(/\bThe tender title is\s*:?\s*/i, "")
+    .replace(/\bThe project sector is\s+.+$/i, "")
+    .replace(/\bThe client is\s+.+$/i, "")
+    .replace(/\bThe positions are as follows\s*:?\s*.+$/i, "")
+    .replace(/\[\s*\{.+$/s, "")
+    .trim();
+  if (title.length > 260) {
+    title = title
+      .split(/\s+-\s+|\.pdf\b|\. Note\b|\. The\b/i)[0]
+      .replace(/\.pdf$/i, "")
+      .trim();
+  }
+  return title.slice(0, 320).trim();
+}
+
 export function normalizeTenderPosition(position: any, index = 0) {
   const title = cleanTenderRequirementText(
     position?.position_title || position?.title || position?.role || position?.name || "",
@@ -126,6 +144,14 @@ export function normalizeTenderRecord(tender: any) {
 
   return {
     ...tender,
+    tender_title: cleanTenderTitle(tender?.tender_title || tender?.name || ""),
+    name: cleanTenderTitle(tender?.name || tender?.tender_title || ""),
+    client: cleanTenderRequirementText(tender?.client || ""),
+    country: cleanTenderRequirementText(tender?.country || ""),
+    tender_number: cleanTenderRequirementText(tender?.tender_number || ""),
+    duration: cleanTenderRequirementText(tender?.duration || ""),
+    submission_type: cleanTenderRequirementText(tender?.submission_type || ""),
+    tender_format: cleanTenderRequirementText(tender?.tender_format || ""),
     scope_summary: cleanTenderRequirementText(tender?.scope_summary || ""),
     special_requirements: toArray(tender?.special_requirements),
     global_team_constraints: toArray(tender?.global_team_constraints),
