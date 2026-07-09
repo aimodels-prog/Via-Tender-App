@@ -80,7 +80,25 @@ export async function parseTenderText(text: string): Promise<any> {
     }
     const { data, error } = await readApiResponse(response);
     if (error) throw new Error(`Tender parsing failed: ${error}`);
-    return data.tender || {};
+    if (data.tender) return data.tender || {};
+    const jobId = data.jobId;
+    if (!jobId) throw new Error("Tender parsing did not return a job id.");
+
+    const startedAt = Date.now();
+    const timeoutMs = 20 * 60 * 1000;
+    while (Date.now() - startedAt < timeoutMs) {
+      await new Promise((resolve) => setTimeout(resolve, 3500));
+      const pollResponse = await fetch(`/api/parse-tender/${encodeURIComponent(jobId)}`);
+      const { data: pollData, error: pollError } = await readApiResponse(pollResponse);
+      if (!pollResponse.ok) {
+        if (pollError) throw new Error(`Tender parsing status failed (${pollResponse.status}): ${pollError}`);
+        throw new Error(pollData.error || "Failed to check tender parsing status");
+      }
+      if (pollError) throw new Error(`Tender parsing status failed: ${pollError}`);
+      if (pollData.status === 'completed') return pollData.tender || {};
+      if (pollData.status === 'failed') throw new Error(pollData.error || "Tender parsing failed.");
+    }
+    throw new Error("Tender parsing is still running after 20 minutes. Please check the tender again later.");
   } catch (error) {
     console.error("Parse Tender Error:", error);
     throw error;

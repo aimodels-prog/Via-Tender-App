@@ -169,6 +169,23 @@ export async function initPostgres() {
   `);
 
   await query(`
+    create table if not exists parse_jobs (
+      id text primary key,
+      user_id uuid references users(id) on delete set null,
+      type text not null,
+      status text not null default 'queued',
+      progress integer not null default 0,
+      error_message text,
+      input jsonb not null default '{}'::jsonb,
+      result jsonb,
+      created_at timestamptz not null default now(),
+      updated_at timestamptz not null default now(),
+      completed_at timestamptz
+    )
+  `);
+  await query(`create index if not exists parse_jobs_user_created_idx on parse_jobs (user_id, created_at desc)`);
+
+  await query(`
     create table if not exists drive_files (
       id text primary key,
       google_file_id text not null unique,

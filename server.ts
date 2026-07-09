@@ -926,10 +926,13 @@ async function startServer() {
     }
   });
 
-  app.post("/api/parse-tender", ...aiRoute, async (req, res) => {
+  async function runTenderParseJob(jobId: string, originalTenderText: string) {
     try {
+      await query(
+        `update parse_jobs set status = 'processing', progress = 10, updated_at = now() where id = $1`,
+        [jobId],
+      );
       const { runParseTenderText } = await import("./src/backend/ai.ts");
-      const originalTenderText = String(req.body.text || "");
       const tender = await runParseTenderText(originalTenderText);
       tender.original_tender_text = originalTenderText;
       tender.original_tender_text_length = originalTenderText.length;
@@ -938,11 +941,71 @@ async function startServer() {
         originalTenderTextStored: true,
         originalTenderTextLength: originalTenderText.length,
         extractedAt: new Date().toISOString(),
+        asyncJobId: jobId,
       };
-      res.json({ tender });
+      await query(
+        `update parse_jobs
+         set status = 'completed', progress = 100, result = $2::jsonb, updated_at = now(), completed_at = now()
+         where id = $1`,
+        [jobId, JSON.stringify({ tender })],
+      );
+      await writeLog("Tender Parsed", `Tender extraction job ${jobId} completed`);
+    } catch (error: any) {
+      console.error("Tender parse job failed:", error);
+      await query(
+        `update parse_jobs
+         set status = 'failed', progress = 100, error_message = $2, updated_at = now(), completed_at = now()
+         where id = $1`,
+        [jobId, error?.message || "Tender parsing failed"],
+      );
+      await writeLog("Tender Parse Failed", `Tender extraction job ${jobId} failed: ${error?.message || error}`, "ERROR");
+    }
+  }
+
+  app.post("/api/parse-tender", ...aiRoute, async (req, res) => {
+    try {
+      const originalTenderText = String(req.body.text || "");
+      if (!originalTenderText.trim()) return res.status(400).json({ error: "Tender text is required." });
+      const jobId = `parse_tender_${uuidv4()}`;
+      await query(
+        `insert into parse_jobs (id, user_id, type, status, progress, input)
+         values ($1, $2, 'tender', 'queued', 0, $3::jsonb)`,
+        [
+          jobId,
+          req.user?.id || null,
+          JSON.stringify({
+            originalTenderText,
+            originalTenderTextLength: originalTenderText.length,
+            startedAt: new Date().toISOString(),
+          }),
+        ],
+      );
+      void runTenderParseJob(jobId, originalTenderText);
+      res.status(202).json({ jobId, status: "queued", progress: 0 });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
+  });
+
+  app.get("/api/parse-tender/:jobId", ...aiRoute, async (req, res) => {
+    const result = await query(
+      `select id, user_id, type, status, progress, error_message, result, created_at, updated_at, completed_at
+       from parse_jobs
+       where id = $1 and type = 'tender' and (user_id = $2 or $3 = 'Admin')`,
+      [req.params.jobId, req.user?.id || null, req.user?.role || "User"],
+    );
+    if (!result.rowCount) return res.status(404).json({ error: "Tender parse job not found." });
+    const job = result.rows[0];
+    res.json({
+      jobId: job.id,
+      status: job.status,
+      progress: job.progress,
+      error: job.error_message,
+      tender: job.result?.tender,
+      createdAt: job.created_at,
+      updatedAt: job.updated_at,
+      completedAt: job.completed_at,
+    });
   });
 
   app.post("/api/match-engine", ...aiRoute, async (req, res) => {
