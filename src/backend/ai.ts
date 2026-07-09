@@ -1005,8 +1005,9 @@ export async function runParseTenderText(text: string): Promise<any> {
 
   ABSOLUTE EXTRACTION CONTRACT
   1. You must be aggressive about completeness: no real staff role, quantity, qualification, experience requirement, responsibility, special requirement, team constraint, client detail, scope detail, deadline, tender number, or project sector that appears in the source may be missed. EXTRACTION MUST BE EXHAUSTIVE AND HIGHLY DETAILED.
-  2. You must be conservative about facts: aggressive extraction means find and preserve every written fact; it never means inventing, assuming, or adding outside requirements. Do NOT summarize too much, retain the specific details, keywords, values, and nuanced conditions exactly as written.
-  3. If a role field is empty, it must be because that exact type of information is genuinely absent from the provided text after checking the whole chunk/document context.
+  2. READ INTELLIGENTLY LINE BY LINE: Tenders can be 200+ pages long with many irrelevant words. You must be smart enough to know what is necessary (roles, skills, deadlines, constraints) and what is not (boilerplates, standard contract clauses, filler text). Focus entirely on the concrete requirements.
+  3. You must be conservative about facts: aggressive extraction means find and preserve every written fact; it never means inventing, assuming, or adding outside requirements. Do NOT summarize too much, retain the specific details, keywords, values, and nuanced conditions exactly as written.
+  4. If a role field is empty, it must be because that exact type of information is genuinely absent from the provided text after checking the whole chunk/document context.
   4. Before final JSON, perform a silent completeness audit: re-check all text around every role title, table row, paragraph, annex, and requirement list to ensure each role has all available education, experience, role/duty, quantity, keyword, nationality, and sector requirements attached.
   5. If the same requirement is written in several places, merge the richest wording into the role or tender-level field. Do not duplicate the same role.
 
