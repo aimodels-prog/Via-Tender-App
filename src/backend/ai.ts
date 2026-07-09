@@ -1025,12 +1025,12 @@ export async function runParseTenderText(text: string): Promise<any> {
   10. For every real role, extract every available role requirement into: position_title, quantity, minimum_education, minimum_years_experience, general_experience, specific_experience, role_description, required_sector_experience, mandatory_skills, required_keywords, and nationality_preference. Include all conditions and specific nuances.
   11. Understand requirement language even when labels differ. Education may be called qualification, academic qualification, degree, credentials, or minimum requirements. Role description may be called duties, tasks, responsibilities, scope, functions, assignment, activities, expected services, or job description. Experience may be described in prose instead of labelled "general" or "specific".
   12. If the tender has experience text but does not explicitly divide it into general and specific experience, place broad career/years/professional requirements in general_experience and sector/project/task-specific requirements in specific_experience.
-  13. Copy the tender's requirement wording as closely as possible after OCR cleanup. Do not rewrite, summarize, or invent requirements.
+  13. Copy the tender's requirement wording as closely as possible after OCR cleanup. Fix OCR artifacts such as letter-spaced words ("o t h e r" -> "other"), split words ("mil lion" -> "million"), garbled bullet/icon symbols, and broken table line wraps. Do not rewrite, summarize, or invent requirements.
   14. Extract tender-level facts too: tender_title, tender_format, client, country, tender_number, deadline, duration, submission_type, scope_summary, project_sector, special_requirements, and global_team_constraints.
   15. Team-level requirements belong in global_team_constraints. Role-specific requirements belong inside that role.
   16. Missing data handling: if a value is genuinely not present anywhere in the tender text, output "" for string fields or [] for array fields. Do not output "N/A", "Not stated", "Unknown", "null", "None", or placeholders.
   17. Source-only rule: extract only what is written in the tender. Do not infer requirements from donor, country, sector, or your outside knowledge.
-  18. Output only valid JSON matching the schema. Never include internal reasoning, commentary, "Wait", "I will", "Let me", or explanation text inside any field.
+  18. Output only valid JSON matching the schema. Never include internal reasoning, commentary, "Wait", "I will", "Let me", page markers, "Official Use Only", icon bullets, or explanation text inside any field.
   
   EXTRACT ABSOLUTELY EVERYTHING. IF YOU THINK A DETAIL IS NOT IMPORTANT, EXTRACT IT ANYWAY. CAPTURE ALL REQUIREMENTS.
 

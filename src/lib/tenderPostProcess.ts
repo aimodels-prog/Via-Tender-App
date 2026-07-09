@@ -1,5 +1,71 @@
+const OCR_SPACED_WORDS = [
+  "other",
+  "relevant",
+  "bidding",
+  "pavement",
+  "million",
+  "telecommunications",
+  "communications",
+  "anthropology",
+  "sociology",
+  "postgraduate",
+  "graduate",
+  "engineering",
+  "internationally",
+  "recognized",
+  "recognised",
+  "professional",
+  "registered",
+  "chartered",
+  "transportation",
+  "feasibility",
+  "construction",
+  "maintenance",
+  "rehabilitation",
+  "procurement",
+  "operations",
+  "experience",
+  "environmental",
+  "management",
+  "authority",
+  "equivalent",
+  "mechatronics",
+  "geospatial",
+  "geomatics",
+  "architectural",
+  "computer",
+  "system",
+];
+
+function repairOcrSpacing(value: any) {
+  let text = String(value || "")
+    .replace(/[●▪▫◦■□◆◇✓✔]/g, " • ")
+    .replace(/\bpost-\s*graduate\b/gi, "postgraduate")
+    .replace(/\bb\s+idding\b/gi, "bidding")
+    .replace(/\bpave\s+ment\b/gi, "pavement")
+    .replace(/\bmil\s+lion\b/gi, "million")
+    .replace(/\btelecommun\s+ications\b/gi, "telecommunications")
+    .replace(/\banthro\s+pology\b/gi, "anthropology")
+    .replace(/\btrans\s+portation\b/gi, "transportation");
+
+  for (const word of OCR_SPACED_WORDS) {
+    const pattern = new RegExp(`\\b${word.split("").join("\\s+")}\\b`, "gi");
+    text = text.replace(pattern, word);
+  }
+
+  return text
+    .split(/\n/)
+    .map((line) =>
+      line.replace(/\b(?:[A-Za-z]\s+){2,}[A-Za-z]\b/g, (match) => {
+        const collapsed = match.replace(/\s+/g, "");
+        return collapsed.length <= 12 ? collapsed : match;
+      }),
+    )
+    .join("\n");
+}
+
 function cleanText(value: any) {
-  return String(value || "").replace(/\s+/g, " ").trim();
+  return repairOcrSpacing(value).replace(/\s+/g, " ").trim();
 }
 
 function toArray(value: any): string[] {
@@ -38,8 +104,12 @@ export function cleanTenderRequirementText(value: any) {
   }
 
   text = text
+    .replace(/\s*[•\u2022]\s*/g, ". ")
     .replace(/\bWait,\s+[^.]+(?:\.\s*)?/gi, "")
     .replace(/\bI will\s+[^.]+(?:\.\s*)?/gi, "")
+    .replace(/\.{2,}/g, ".")
+    .replace(/\.\s+\./g, ".")
+    .replace(/^(?:\.\s*)+/, "")
     .replace(/\s+/g, " ")
     .trim();
 
