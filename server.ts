@@ -200,6 +200,16 @@ async function startServer() {
   app.set("trust proxy", 1);
   app.use(helmet({ contentSecurityPolicy: false }));
   app.use(express.json({ limit: "50mb" }));
+  app.use((error: any, _req: Request, res: Response, next: NextFunction) => {
+    if (!error) return next();
+    if (error.type === "entity.too.large") {
+      return res.status(413).json({ error: "Uploaded document text is too large for the server to process in one request." });
+    }
+    if (error instanceof SyntaxError && "body" in error) {
+      return res.status(400).json({ error: "Invalid JSON request body." });
+    }
+    return next(error);
+  });
   app.use(cookieParser());
   app.use(
     "/api/auth",

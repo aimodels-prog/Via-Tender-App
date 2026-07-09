@@ -1048,8 +1048,8 @@ export async function runParseTenderText(text: string): Promise<any> {
 
     if (!incomplete.length) return normalized;
 
-    const repairedTenderPieces: any[] = [normalized];
     const batchSize = 8;
+    const repairPrompts: string[] = [];
     for (let start = 0; start < incomplete.length; start += batchSize) {
       const batch = incomplete.slice(start, start + batchSize);
       const repairPrompt = `You are repairing tender role details before the tender is shown to the user.
@@ -1086,14 +1086,17 @@ export async function runParseTenderText(text: string): Promise<any> {
 
       SOURCE CONTEXT BY POSITION:
       ${batch.map((item: any) => `--- POSITION: ${item.position.position_title} ---\n${item.context}`).join("\n\n")}`;
-
-      try {
-        const repaired = await parseTenderWithPrompt(repairPrompt, ["gemini-3.1-pro-preview", "gemini-3.5-flash"]);
-        repairedTenderPieces.push(repaired);
-      } catch (error: any) {
-        console.warn("[TENDER EXTRACTION] Role detail repair batch failed; continuing.", error?.message || error);
-      }
+      repairPrompts.push(repairPrompt);
     }
+
+    const repairedTenderPieces: any[] = [normalized];
+    const repairResults = await Promise.allSettled(
+      repairPrompts.map((repairPrompt) => parseTenderWithPrompt(repairPrompt, ["gemini-3.1-pro-preview", "gemini-3.5-flash"])),
+    );
+    repairResults.forEach((result) => {
+      if (result.status === "fulfilled") repairedTenderPieces.push(result.value);
+      else console.warn("[TENDER EXTRACTION] Role detail repair batch failed; continuing.", result.reason?.message || result.reason);
+    });
 
     return postProcessTenderExtraction(mergeTenderExtractions(repairedTenderPieces), text);
   };
@@ -1101,7 +1104,7 @@ export async function runParseTenderText(text: string): Promise<any> {
   const chunks = prepareTenderPromptChunks(text);
   let parsed: any;
   if (chunks.length > 1) {
-    const longTenderModels = ["gemini-3.1-pro-preview", "gemini-3.1-flash-lite", "gemini-3.5-flash"];
+    const longTenderModels = ["gemini-3.1-flash-lite", "gemini-3.1-pro-preview", "gemini-3.5-flash"];
     const roleOnlyResults = await Promise.allSettled(
       chunks.map((chunk, index) =>
         parseTenderWithPrompt(

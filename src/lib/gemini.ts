@@ -1,5 +1,26 @@
 import { api } from './api';
 
+async function readApiResponse(response: Response) {
+  const text = await response.text();
+  const contentType = response.headers.get('content-type') || '';
+  const isJson = contentType.includes('application/json') || /^[\s\n\r]*[\[{]/.test(text);
+  if (!isJson) {
+    const cleanText = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    return {
+      data: {},
+      error: cleanText || `Server returned ${response.status} ${response.statusText || ''}`.trim(),
+    };
+  }
+  try {
+    return { data: JSON.parse(text), error: '' };
+  } catch (error: any) {
+    return {
+      data: {},
+      error: `Server returned invalid JSON: ${error.message}`,
+    };
+  }
+}
+
 export async function parseCVText(text: string): Promise<any[]> {
   const taxonomyItems = await api.getTaxonomy();
   const aiSettings = await api.getAISettings();
@@ -10,10 +31,12 @@ export async function parseCVText(text: string): Promise<any[]> {
       body: JSON.stringify({ text, taxonomy: taxonomyItems })
     });
     if (!response.ok) {
-        const errorData = await response.json();
+        const { data: errorData, error } = await readApiResponse(response);
+        if (error) throw new Error(error);
         throw new Error(errorData.error || "Failed to parse CV");
     }
-    const data = await response.json();
+    const { data, error } = await readApiResponse(response);
+    if (error) throw new Error(error);
     return data.experts || [];
   } catch (error) {
     console.error("Parse CV Error:", error);
@@ -29,10 +52,12 @@ export async function auditExtractedCV(rawText: string, expert: any): Promise<an
       body: JSON.stringify({ rawText, expert })
     });
     if (!response.ok) {
-      const errorData = await response.json();
+      const { data: errorData, error } = await readApiResponse(response);
+      if (error) throw new Error(error);
       throw new Error(errorData.error || "Failed to audit CV extraction");
     }
-    const data = await response.json();
+    const { data, error } = await readApiResponse(response);
+    if (error) throw new Error(error);
     return data.expert || expert;
   } catch (error) {
     console.error("Audit CV Error:", error);
@@ -49,10 +74,12 @@ export async function parseTenderText(text: string): Promise<any> {
       body: JSON.stringify({ text })
     });
     if (!response.ok) {
-        const errorData = await response.json();
+        const { data: errorData, error } = await readApiResponse(response);
+        if (error) throw new Error(`Tender parsing failed (${response.status}): ${error}`);
         throw new Error(errorData.error || "Failed to parse Tender");
     }
-    const data = await response.json();
+    const { data, error } = await readApiResponse(response);
+    if (error) throw new Error(`Tender parsing failed: ${error}`);
     return data.tender || {};
   } catch (error) {
     console.error("Parse Tender Error:", error);
