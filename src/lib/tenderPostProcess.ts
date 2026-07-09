@@ -18,6 +18,12 @@ function toArray(value: any): string[] {
 }
 
 export function cleanTenderRequirementText(value: any) {
+  value = String(value || "")
+    .split(/\s*---\s*NEXT MATCH CONTEXT\s*---\s*/i)[0]
+    .split(/\s*---\s*PAGE\s+\d+\s*---\s*/i)[0]
+    .split(/\bOfficial Use Only\b/i)[0]
+    .split(/\bS\/No\.\s+Evaluation Criteria\b/i)[0]
+    .trim();
   let text = cleanText(value)
     .replace(/â€™/g, "'")
     .replace(/â€œ|â€/g, '"')
@@ -50,6 +56,26 @@ export function cleanTenderRequirementText(value: any) {
   return deduped.join(" ").slice(0, 1800).trim();
 }
 
+function cleanTenderEducationRequirement(value: any) {
+  const text = cleanTenderRequirementText(value)
+    .replace(/^Education\s*:?\s*/i, "")
+    .trim();
+  if (/^\d{1,2}$/.test(text)) return "";
+  return text;
+}
+
+function cleanTenderRoleDescription(value: any) {
+  const text = cleanTenderRequirementText(value)
+    .split(/\bEducation\s*:?\s*\d{0,2}\b/i)[0]
+    .trim();
+  if (
+    /\b(?:client will provide introductory letters|consultant shall be responsible for arranging all necessary office|arranging all necessary office and living accommodation|the number of points to be assigned|sub-criteria and relevant percentage weights)\b/i.test(text)
+  ) {
+    return "";
+  }
+  return text;
+}
+
 function cleanTenderTitle(value: any) {
   let title = cleanTenderRequirementText(value)
     .replace(/\bNote:\s*.+$/i, "")
@@ -79,12 +105,12 @@ export function normalizeTenderPosition(position: any, index = 0) {
     id,
     position_title: title || `Position ${index + 1}`,
     quantity: Number(position?.quantity || position?.qty || 1) || 1,
-    minimum_education: cleanTenderRequirementText(position?.minimum_education || position?.education || ""),
+    minimum_education: cleanTenderEducationRequirement(position?.minimum_education || position?.education || ""),
     minimum_years_experience:
       Number(position?.minimum_years_experience || position?.min_years_experience || 0) || undefined,
     general_experience: cleanTenderRequirementText(position?.general_experience || ""),
     specific_experience: cleanTenderRequirementText(position?.specific_experience || ""),
-    role_description: cleanTenderRequirementText(
+    role_description: cleanTenderRoleDescription(
       position?.role_description || position?.description || position?.responsibilities || "",
     ),
     required_sector_experience: toArray(position?.required_sector_experience),

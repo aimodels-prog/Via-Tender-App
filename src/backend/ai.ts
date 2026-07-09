@@ -758,16 +758,17 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
     const key = title.toLowerCase();
     if (hasAuthoritativeRoleTable && !recovered.some((item: any) => normalizePositionTitle(item.position_title || "").toLowerCase() === key)) return;
     const current = byTitle.get(key) || {};
+    const preferCurrentSource = hasAuthoritativeRoleTable && Boolean(current.recovered_from_text);
     byTitle.set(key, {
       ...position,
       ...current,
       position_title: current.position_title || title,
       quantity: current.quantity || position.quantity || 1,
-      minimum_education: bestText(current.minimum_education, position.minimum_education),
+      minimum_education: preferCurrentSource ? current.minimum_education || position.minimum_education : bestText(current.minimum_education, position.minimum_education),
       minimum_years_experience: current.minimum_years_experience || position.minimum_years_experience,
-      general_experience: bestText(current.general_experience, position.general_experience),
-      specific_experience: bestText(current.specific_experience, position.specific_experience),
-      role_description: bestText(current.role_description, position.role_description || position.description),
+      general_experience: preferCurrentSource ? current.general_experience || position.general_experience : bestText(current.general_experience, position.general_experience),
+      specific_experience: preferCurrentSource ? current.specific_experience || position.specific_experience : bestText(current.specific_experience, position.specific_experience),
+      role_description: preferCurrentSource ? current.role_description || position.role_description || position.description : bestText(current.role_description, position.role_description || position.description),
       required_sector_experience: bestArray(current.required_sector_experience, position.required_sector_experience),
       mandatory_skills: bestArray(current.mandatory_skills, position.mandatory_skills),
       required_keywords: bestArray(current.required_keywords, position.required_keywords),
@@ -961,8 +962,13 @@ function extractTenderRoleContext(rawText: string, title: string, positionNumber
       .map((line, index) => ({ line, index, normalized: line.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() }))
       .filter(({ line, index }) => {
         if (!new RegExp(`^\\s*${positionNumber}\\.\\s+`, "i").test(line)) return false;
-        const window = lines.slice(index, Math.min(lines.length, index + 10)).join(" ").toLowerCase().replace(/[^a-z0-9]+/g, " ");
-        return titleWords.some((word) => window.includes(word));
+        const lineKey = line.toLowerCase().replace(/\bsignaling\b/g, "signalling").replace(/[^a-z0-9]+/g, " ");
+        const rawWindow = lines.slice(index, Math.min(lines.length, index + 12)).join(" ");
+        const window = rawWindow.toLowerCase().replace(/\bsignaling\b/g, "signalling").replace(/[^a-z0-9]+/g, " ");
+        const hasRequirementMarkers = /\b(?:bachelor|master|postgraduate|degree|experience|professional registration|chartered|registered)\b/i.test(rawWindow);
+        const lineHasTitleWord = titleWords.some((word) => lineKey.includes(word));
+        const windowHasAllTitleWords = titleWords.every((word) => window.includes(word));
+        return windowHasAllTitleWords || (lineHasTitleWord && hasRequirementMarkers);
       })
       .map(({ index }) => index);
 
