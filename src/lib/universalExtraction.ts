@@ -477,6 +477,10 @@ function cleanRequirementContentLine(line: string, titleWords: string[]) {
   let text = stripRequirementNoise(line)
     .replace(/^[-•\u2022]\s*/, "• ")
     .replace(/^\d{1,2}\.\s*/, "")
+    .replace(/^(?:Qualification|Education)\s*:?\s*/i, "")
+    .replace(/^Experience\s*:?\s*/i, "")
+    .replace(/^Role\s*&\s*Responsibilities\s*(?:and\s*)?/i, "")
+    .replace(/^\(but not limited to\)\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
   if (!text) return "";
@@ -524,6 +528,27 @@ function parseYearsFromRequirement(text: string) {
   return values.length ? Math.max(...values.filter(Boolean)) : undefined;
 }
 
+function splitExperienceAndDuty(points: string[]) {
+  const general: string[] = [];
+  const duties: string[] = [];
+  const dutyPattern =
+    /\b(?:Responsible for|Monitor field|Taking measurements|To supervise|Prepare test packs|Perform a variety|Measuring a property|He will|Review marked-up|making sure|coordinate with|report to|provide advice)\b/i;
+
+  for (const point of points) {
+    const match = point.match(dutyPattern);
+    if (!match || match.index === undefined) {
+      general.push(point);
+      continue;
+    }
+    const before = point.slice(0, match.index).trim();
+    const after = point.slice(match.index).trim();
+    if (before) general.push(before);
+    if (after) duties.push(after);
+  }
+
+  return { general, duties };
+}
+
 function parseRequirementSections(title: string, nearby: string) {
   const titleWords = titleWordsFor(title);
   const lines = String(nearby || "")
@@ -532,16 +557,23 @@ function parseRequirementSections(title: string, nearby: string) {
     .map(stripRequirementNoise)
     .filter(Boolean);
 
-  const educationIndex = lines.findIndex((line) => /^Education\s*:?\s*\d*$/i.test(line));
-  const experienceIndex = lines.findIndex((line, index) => index > educationIndex && /^[•\u2022]?\s*Experience\s*:?\s*$/i.test(line));
-  const registrationIndex = lines.findIndex((line, index) => index > Math.max(educationIndex, experienceIndex) && /^Professional Registration\b/i.test(line));
+  const educationIndex = lines.findIndex((line) => /^(?:Education|Qualification)\b/i.test(line));
+  const experienceIndex = lines.findIndex((line, index) => index > educationIndex && /^[•\u2022]?\s*Experience\b/i.test(line));
+  const roleIndex = lines.findIndex((line, index) => index > Math.max(educationIndex, experienceIndex) && /^Role\s*&\s*Responsibilities\b/i.test(line));
+  const registrationIndex = lines.findIndex((line, index) => index > Math.max(educationIndex, experienceIndex, roleIndex) && /^Professional Registration\b/i.test(line));
   const safeSlice = (start: number, end: number) => (start >= 0 ? lines.slice(start, end >= 0 ? end : lines.length) : []);
 
-  const educationLines = safeSlice(educationIndex + 1, experienceIndex >= 0 ? experienceIndex : registrationIndex);
-  const experienceLines = safeSlice(experienceIndex + 1, registrationIndex);
+  const educationLines = safeSlice(educationIndex, experienceIndex >= 0 ? experienceIndex : (roleIndex >= 0 ? roleIndex : registrationIndex));
+  const experienceLines = safeSlice(experienceIndex, roleIndex >= 0 ? roleIndex : registrationIndex);
+  const roleLines = roleIndex >= 0 ? safeSlice(roleIndex, registrationIndex) : [];
   const registrationLines = registrationIndex >= 0 ? safeSlice(registrationIndex + 1, -1) : [];
-  const educationPoints = requirementPoints(educationLines, titleWords);
-  const experiencePoints = requirementPoints(experienceLines, titleWords);
+  const rawEducationPoints = requirementPoints(educationLines, titleWords);
+  const movedExperiencePoints = rawEducationPoints.filter((point) => /\b(?:shall have|years?|work experience|relevant experience)\b/i.test(point));
+  const educationPoints = rawEducationPoints.filter((point) => !movedExperiencePoints.includes(point));
+  const rawExperiencePoints = [...movedExperiencePoints, ...requirementPoints(experienceLines, titleWords)];
+  const splitExperience = splitExperienceAndDuty(rawExperiencePoints);
+  const experiencePoints = splitExperience.general;
+  const rolePoints = [...splitExperience.duties, ...requirementPoints(roleLines, titleWords)];
   const registrationPoints = requirementPoints(registrationLines, titleWords);
   const generalPoints = experiencePoints.slice(0, 1);
   const specificPoints = experiencePoints.length > 1
@@ -553,7 +585,7 @@ function parseRequirementSections(title: string, nearby: string) {
     minimum_years_experience: parseYearsFromRequirement(experiencePoints.join(" ")),
     general_experience: (generalPoints.length ? generalPoints : experiencePoints.slice(0, 1)).join(" "),
     specific_experience: specificPoints.filter((point) => !generalPoints.includes(point) || /specific|project|feasibility|study|design/i.test(point)).join(" "),
-    role_description: registrationPoints.length ? `Professional Registration: ${registrationPoints.join(" ")}` : "",
+    role_description: rolePoints.join(" ") || (registrationPoints.length ? `Professional Registration: ${registrationPoints.join(" ")}` : ""),
   };
 }
 
@@ -692,7 +724,7 @@ function extractJobTitlePositions(lines: TextLine[]) {
       if (stopPattern.test(text)) break;
       blockLines.push(text);
     }
-    const block = blockLines.join(" ");
+    const block = blockLines.join("\n");
     positions.push({
       ...buildTenderPositionFromBlock(title, line.text, block, "job_title_section"),
       quantity: 1,
@@ -858,8 +890,18 @@ export function extractUniversalTenderFacts(rawText: string): UniversalTenderFac
     ...extractLooseRoleListPositions(lines),
   ];
   if (structuredPositions.length) {
+    const strongRoleKeys = new Set(
+      structuredPositions
+        .filter((position) => !String(position.recovery_source || "").includes("loose_role_section"))
+        .map((position) => positionKey(position.position_title))
+        .filter(Boolean),
+    );
+    const reliablePositions = structuredPositions.filter((position) => {
+      const key = positionKey(position.position_title);
+      return !String(position.recovery_source || "").includes("loose_role_section") || !strongRoleKeys.has(key);
+    });
     const byTitle = new Map<string, any>();
-    structuredPositions.forEach((position) => {
+    reliablePositions.forEach((position) => {
       const key = positionKey(position.position_title);
       const current = byTitle.get(key) || {};
       byTitle.set(key, {

@@ -146,6 +146,16 @@ function cleanTenderRoleDescription(value: any) {
   return text;
 }
 
+function cleanTenderSpecificExperience(value: any) {
+  const text = cleanTenderRequirementText(value);
+  if (
+    /\b(?:standard form of agreement|conditions of engagement|letter of tender|submission of tender|technical and financial tender checklist|tenderers shall follow|e-tendering portal|data requested in this section shall be used|same order as outlined|shall constitute the technical and financial tender|deemed to be in possession|arabic version of the standard document)\b/i.test(text)
+  ) {
+    return "";
+  }
+  return text;
+}
+
 function cleanTenderTitle(value: any) {
   let title = cleanTenderRequirementText(value)
     .replace(/\bNote:\s*.+$/i, "")
@@ -179,7 +189,7 @@ export function normalizeTenderPosition(position: any, index = 0) {
     minimum_years_experience:
       Number(position?.minimum_years_experience || position?.min_years_experience || 0) || undefined,
     general_experience: cleanTenderRequirementText(position?.general_experience || ""),
-    specific_experience: cleanTenderRequirementText(position?.specific_experience || ""),
+    specific_experience: cleanTenderSpecificExperience(position?.specific_experience || ""),
     role_description: cleanTenderRoleDescription(
       position?.role_description || position?.description || position?.responsibilities || "",
     ),
