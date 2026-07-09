@@ -389,18 +389,37 @@ function extractQuantity(line: string) {
 }
 
 function buildTenderPositionFromBlock(title: string, line: string, nearby: string, source: string) {
-  const reqText = clean(nearby);
+  const rawReqText = String(nearby || "");
+  const reqText = clean(rawReqText);
+  const stripRoleTitleNoise = (value: string) =>
+    clean(value)
+      .replace(new RegExp(`\\b\\d{1,2}\\.\\s+${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i"), " ")
+      .replace(/\b\d{1,2}\.\s+[A-Z][A-Za-z /&().-]{0,80}(?=\s+(?:Bachelor|Master|Postgraduate|Engineering|Experience|Professional|Degree|Diploma|Qualification|\u2022|))/g, " ")
+      .replace(/\bEstimate\s+Man\s+months\b/gi, " ")
+      .replace(/\bOfficial Use Only\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  const educationSection = stripRoleTitleNoise(
+    reqText.match(/\bEducation\s*:?\s*(?:\d{1,2}\s*)?(.+?)(?=\bExperience\s*:?\b|\bProfessional Registration\b|\b\d{1,2}\.\s+[A-Z]|$)/i)?.[1] || "",
+  );
+  const experienceSection = stripRoleTitleNoise(
+    reqText.match(/\bExperience\s*:?\s*(.+?)(?=\bProfessional Registration\b|\bEducation\s*:?\s*\d{0,2}\s*\d{1,2}\.\s+[A-Z]|\b\d{1,2}\.\s+[A-Z]|$)/i)?.[1] || "",
+  );
+  const registrationSection = stripRoleTitleNoise(
+    reqText.match(/\bProfessional Registration\s*:?\s*(.+?)(?=\bEducation\s*:?\s*\d{0,2}\s*\d{1,2}\.\s+[A-Z]|\b\d{1,2}\.\s+[A-Z]|$)/i)?.[1] || "",
+  );
   const firstExperienceSentence = clean(reqText.match(/\b(?:shall have|must have|minimum|min\.?|at least|required)\s+[^.]{0,220}?\bexperience\b[^.]{0,260}(?:\.|$)/i)?.[0] || "");
   const firstResponsibilitySentence = clean(reqText.match(/\b(?:shall|will|must|responsible for|responsibilities include|duties include|tasks include|to\s+(?:manage|lead|prepare|review|supervise|coordinate|undertake|conduct|ensure|assist))\b[^.]{20,500}(?:\.|$)/i)?.[0] || "");
   const qualificationSentence = clean(reqText.match(/\b(?:qualification|minimum education|academic qualification|education)\s*[:\-]?\s*(.+?)(?=\b(?:general experience|specific experience|experience|role|responsibil|duties|tasks|skills?|location|position|job title)\b|$)/i)?.[1] || "");
+  const combinedRequirements = stripRoleTitleNoise([experienceSection, registrationSection].filter(Boolean).join(" "));
   return {
     position_title: title,
     quantity: extractQuantity(line),
-    minimum_education: qualificationSentence || clean(reqText.match(/\b(?:bachelor|master|phd|degree|diploma|qualification)[^.]{0,220}(?:\.|$)/i)?.[0] || ""),
+    minimum_education: educationSection || qualificationSentence || clean(reqText.match(/\b(?:bachelor|master|phd|degree|diploma|qualification)[^.]{0,220}(?:\.|$)/i)?.[0] || ""),
     minimum_years_experience: Number(reqText.match(/\b(?:minimum|min\.?|at least)\s+(\d{1,2})\+?\s+years?\b/i)?.[1] || reqText.match(/\b(\d{1,2})\+?\s+years?\s+(?:of\s+)?(?:relevant|professional|general|specific)?\s*experience\b/i)?.[1] || 0) || undefined,
-    general_experience: clean(reqText.match(/\bgeneral experience\s*[:\-]?\s*(.+?)(?=\bspecific experience\b|\b(?:role\s*&\s*responsibilities|role description|responsibilities|duties|tasks|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || "") || firstExperienceSentence,
+    general_experience: clean(reqText.match(/\bgeneral experience\s*[:\-]?\s*(.+?)(?=\bspecific experience\b|\b(?:role\s*&\s*responsibilities|role description|responsibilities|duties|tasks|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || "") || experienceSection || firstExperienceSentence,
     specific_experience: clean(reqText.match(/\bspecific experience\s*[:\-]?\s*(.+?)(?=\b(?:role\s*&\s*responsibilities|role description|responsibilities|duties|tasks|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
-    role_description: clean(reqText.match(/\b(?:role\s*&\s*responsibilities|role description|responsibilities|tasks|duties|scope of work)\s*[:\-]?\s*(.+?)(?=\b(?:general experience|specific experience|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || "") || firstResponsibilitySentence,
+    role_description: clean(reqText.match(/\b(?:role\s*&\s*responsibilities|role description|responsibilities|tasks|duties|scope of work)\s*[:\-]?\s*(.+?)(?=\b(?:general experience|specific experience|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || "") || firstResponsibilitySentence || combinedRequirements,
     required_sector_experience: [],
     mandatory_skills: Array.from(new Set((nearby.match(/\b(?:FIDIC|AutoCAD|Primavera|BIM|GIS|QA\/QC|HSE|PMP|laboratory|asphalt|earthworks?|survey|quantity|document control|contract management|site supervision)\b/gi) || []).map((item) => item.trim()))),
     required_keywords: Array.from(new Set((nearby.match(/\b(?:roads?|bridges?|water|wastewater|buildings?|infrastructure|construction|supervision|design|drainage|pavement|utilities|geotechnical|materials?|laboratory|asphalt|earthworks?|survey|quantity|document control)\b/gi) || []).map((item) => item.trim()))),
@@ -415,19 +434,52 @@ function enrichPositionsFromBlocks(basePositions: any[], lines: TextLine[]) {
     const title = normalizePositionTitle(position.position_title || "");
     if (!title) return position;
     const titleKey = positionKey(title);
-    const index = lines.findIndex((line) => {
+    const titleWords = titleKey.split(/\s+/).filter((word) => word.length > 2);
+    const positionNumber = Number(position.source_position_number || 0);
+    const explicitNumberedIndexes = positionNumber
+      ? lines
+          .map((line, index) => ({ line, index }))
+          .filter(({ line, index }) => {
+            if (!new RegExp(`^\\s*${positionNumber}\\.\\s+`, "i").test(line.text)) return false;
+            const window = lines.slice(index, Math.min(lines.length, index + 8)).map((item) => positionKey(item.text)).join(" ");
+            return titleWords.some((word) => window.includes(word));
+          })
+          .map(({ index }) => index)
+      : [];
+    const candidateIndexes = lines
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => {
       const lineKey = positionKey(line.text);
       return lineKey === titleKey || new RegExp(`\\b${title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(line.text);
-    });
+      })
+      .map(({ index }) => index);
+    const index = [...explicitNumberedIndexes, ...candidateIndexes]
+      .filter((value, index, array) => value >= 0 && array.indexOf(value) === index)
+      .sort((a, b) => {
+        const score = (idx: number) => {
+          const window = lines.slice(Math.max(0, idx - 3), Math.min(lines.length, idx + 70)).map((item) => item.text).join(" ");
+          return (
+            (/\bEducation\s*:?\b/i.test(window) ? 8 : 0) +
+            (/\bExperience\s*:?\b/i.test(window) ? 8 : 0) +
+            (/\bProfessional Registration\b/i.test(window) ? 4 : 0) +
+            (/Table\s+\d+:\s+Required qualifications/i.test(window) ? 3 : 0) -
+            (/\bPosition\s+K[-\s]?\d+/i.test(window) ? 5 : 0)
+          );
+        };
+        return score(b) - score(a) || a - b;
+      })[0] ?? -1;
     if (index < 0) return position;
     const blockLines: string[] = [];
-    for (let i = index; i < Math.min(lines.length, index + 55); i++) {
+    const start = Math.max(0, index - 2);
+    const nextNumberPattern = positionNumber ? new RegExp(`^\\s*${positionNumber + 1}\\.\\s+`, "i") : null;
+    for (let i = start; i < Math.min(lines.length, index + 90); i++) {
       const text = lines[i].text;
+      if (i > index && nextNumberPattern?.test(text)) break;
       if (i > index && /\bJOB\s+TITLE\b/i.test(text)) break;
       if (i > index + 4 && isLikelyTenderPosition(text) && /\b(?:qualification|experience|responsibil|duties|tasks)\b/i.test(blockLines.join(" "))) break;
       blockLines.push(text);
     }
-    const enriched = buildTenderPositionFromBlock(title, lines[index].text, blockLines.join(" "), "requirement_block_enrichment");
+    const enriched = buildTenderPositionFromBlock(title, lines[index].text, blockLines.join("\n"), "requirement_block_enrichment");
     return {
       ...position,
       minimum_education: position.minimum_education || enriched.minimum_education,

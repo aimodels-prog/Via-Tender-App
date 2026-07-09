@@ -947,7 +947,7 @@ function missingTenderRoleDetailCount(position: any) {
   ].filter(Boolean).length;
 }
 
-function extractTenderRoleContext(rawText: string, title: string) {
+function extractTenderRoleContext(rawText: string, title: string, positionNumber?: number) {
   const lines = String(rawText || "")
     .replace(/\r/g, "\n")
     .split(/\n+/)
@@ -955,18 +955,44 @@ function extractTenderRoleContext(rawText: string, title: string) {
     .filter(Boolean);
   const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const titleWords = normalizedTitle.split(/\s+/).filter((word) => word.length > 2);
+  const numberedWindows: string[] = [];
+  if (positionNumber) {
+    const numberedIndexes = lines
+      .map((line, index) => ({ line, index, normalized: line.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() }))
+      .filter(({ line, index }) => {
+        if (!new RegExp(`^\\s*${positionNumber}\\.\\s+`, "i").test(line)) return false;
+        const window = lines.slice(index, Math.min(lines.length, index + 10)).join(" ").toLowerCase().replace(/[^a-z0-9]+/g, " ");
+        return titleWords.some((word) => window.includes(word));
+      })
+      .map(({ index }) => index);
+
+    for (const index of numberedIndexes.slice(0, 3)) {
+      const nextNumberPattern = new RegExp(`^\\s*${positionNumber + 1}\\.\\s+`, "i");
+      const start = Math.max(0, index - 3);
+      let end = Math.min(lines.length, index + 95);
+      for (let i = index + 1; i < end; i++) {
+        if (nextNumberPattern.test(lines[i])) {
+          end = i;
+          break;
+        }
+      }
+      numberedWindows.push(lines.slice(start, end).join("\n"));
+    }
+  }
+
   const hitIndexes = lines
     .map((line, index) => ({ line, index, normalized: line.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() }))
     .filter(({ normalized }) => normalized.includes(normalizedTitle) || titleWords.every((word) => normalized.includes(word)))
     .map(({ index }) => index);
 
-  if (!hitIndexes.length) return "";
   const windows: string[] = [];
+  windows.push(...numberedWindows);
   for (const index of hitIndexes.slice(0, 5)) {
     const start = Math.max(0, index - 35);
     const end = Math.min(lines.length, index + 80);
     windows.push(lines.slice(start, end).join("\n"));
   }
+  if (!windows.length) return "";
   return Array.from(new Set(windows)).join("\n\n--- NEXT MATCH CONTEXT ---\n\n").slice(0, 14000);
 }
 
@@ -1045,7 +1071,7 @@ export async function runParseTenderText(text: string): Promise<any> {
       .map((position: any) => ({
         position,
         missingCount: missingTenderRoleDetailCount(position),
-        context: extractTenderRoleContext(text, position.position_title),
+        context: extractTenderRoleContext(text, position.position_title, Number(position.source_position_number || 0) || undefined),
       }))
       .filter((item: any) => item.context)
       .sort((a: any, b: any) => b.missingCount - a.missingCount);
