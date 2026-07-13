@@ -136,7 +136,14 @@ async function completePortalLogin(req: Request, res: Response, portalToken: str
       issuer: PORTAL_SSO_ISSUER,
       audience: PORTAL_SSO_AUDIENCE,
     });
-  } catch (error) {
+  } catch (error: any) {
+    console.warn("[Portal SSO] Token verification failed:", {
+      reason: error?.message || "Unknown JWT verification error",
+      issuer: PORTAL_SSO_ISSUER,
+      audience: PORTAL_SSO_AUDIENCE,
+      algorithms: getPortalAlgorithms(),
+      hasSecret: Boolean(PORTAL_SSO_SECRET),
+    });
     await writeLog("Portal SSO Failed", "Rejected invalid Portal SSO token", "ERROR").catch(() => {});
     return res.status(401).send("Invalid or expired Portal SSO token.");
   }
