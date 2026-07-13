@@ -39,6 +39,7 @@ const PORTAL_LOGIN_URL = process.env.PORTAL_LOGIN_URL || "https://portal.via-int
 const PORTAL_SSO_SECRET = process.env.PORTAL_SSO_SECRET || "";
 const PORTAL_SSO_ISSUER = process.env.PORTAL_SSO_ISSUER || "via-portal";
 const PORTAL_SSO_AUDIENCE = process.env.PORTAL_SSO_AUDIENCE || process.env.PORTAL_SSO_APP_SLUG || "";
+const PORTAL_POST_LOGOUT_URL = process.env.PORTAL_POST_LOGOUT_URL || new URL(PORTAL_LOGIN_URL).origin;
 const DISABLE_VIA_STAFF_PASSWORD_LOGIN = process.env.DISABLE_VIA_STAFF_PASSWORD_LOGIN !== "false";
 const EMERGENCY_ADMIN_LOGIN_ENABLED = process.env.EMERGENCY_ADMIN_LOGIN_ENABLED !== "false";
 
@@ -482,7 +483,7 @@ async function startServer() {
 
   app.post("/api/auth/logout", (_req, res) => {
     res.clearCookie(JWT_COOKIE);
-    res.json({ success: true });
+    res.json({ success: true, redirectTo: PORTAL_POST_LOGOUT_URL });
   });
 
   app.get("/api/stats", requireAuth, async (_req, res) => {

@@ -118,11 +118,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setCurrentUser(null);
     window.dispatchEvent(new Event("authChanged"));
     fetch("/api/auth/logout", { method: "POST", credentials: "include" })
+      .then((response) => response.json().catch(() => ({})))
+      .then((data) => {
+        window.location.replace(data.redirectTo || "https://portal.via-int.com");
+      })
       .catch((error) => {
         console.error("Logout request failed:", error);
-      })
-      .finally(() => {
-        window.location.replace("/");
+        window.location.replace("https://portal.via-int.com");
       });
   };
 
