@@ -69,15 +69,30 @@ function AppShell() {
   }
 
   if (location.pathname === "/") {
+    if (isAuthenticated) return <Navigate to="/dashboard" replace />;
+    window.location.replace(`/auth/portal/login?returnTo=${encodeURIComponent(window.location.href)}`);
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50 text-sm font-medium text-slate-500">
+        Redirecting to VIA Portal...
+      </div>
+    );
+  }
+
+  if (location.pathname === "/emergency-admin") {
     return (
       <Routes>
-        <Route path="/" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Landing />} />
+        <Route path="/emergency-admin" element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Landing emergencyAdmin />} />
       </Routes>
     );
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/" replace />;
+    window.location.replace(`/auth/portal/login?returnTo=${encodeURIComponent(window.location.href)}`);
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50 text-sm font-medium text-slate-500">
+        Redirecting to VIA Portal...
+      </div>
+    );
   }
 
   return (

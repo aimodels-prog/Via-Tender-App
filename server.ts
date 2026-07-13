@@ -35,6 +35,12 @@ declare global {
 const JWT_COOKIE = "via_session";
 const JWT_SECRET = process.env.JWT_SECRET || "dev-only-change-before-production";
 const ALLOWED_EMAIL_DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || "via-int.com").trim().toLowerCase();
+const PORTAL_LOGIN_URL = process.env.PORTAL_LOGIN_URL || "https://portal.via-int.com/auth/google";
+const PORTAL_SSO_SECRET = process.env.PORTAL_SSO_SECRET || "";
+const PORTAL_SSO_ISSUER = process.env.PORTAL_SSO_ISSUER || "via-portal";
+const PORTAL_SSO_AUDIENCE = process.env.PORTAL_SSO_AUDIENCE || process.env.PORTAL_SSO_APP_SLUG || "";
+const DISABLE_VIA_STAFF_PASSWORD_LOGIN = process.env.DISABLE_VIA_STAFF_PASSWORD_LOGIN !== "false";
+const EMERGENCY_ADMIN_LOGIN_ENABLED = process.env.EMERGENCY_ADMIN_LOGIN_ENABLED !== "false";
 
 function isAllowedEmail(value: string) {
   const email = String(value || "").trim().toLowerCase();
@@ -43,6 +49,40 @@ function isAllowedEmail(value: string) {
 
 function domainError() {
   return `Only ${ALLOWED_EMAIL_DOMAIN} email addresses are allowed.`;
+}
+
+function getRequestOrigin(req: Request) {
+  return `${req.protocol}://${req.get("host")}`;
+}
+
+function getCurrentAppUrl(req: Request) {
+  return `${getRequestOrigin(req)}${req.originalUrl}`;
+}
+
+function cleanPortalTokenUrl(req: Request) {
+  const url = new URL(getCurrentAppUrl(req));
+  url.searchParams.delete("portal_token");
+  return url.toString();
+}
+
+function getPortalAlgorithms(): jwt.Algorithm[] {
+  const raw = process.env.PORTAL_SSO_JWT_ALGORITHMS || "HS256";
+  return raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean) as jwt.Algorithm[];
+}
+
+function normalizePortalRole(role: any): "Admin" | "User" {
+  return String(role || "").toLowerCase() === "admin" ? "Admin" : "User";
+}
+
+function getPortalLoginRedirect(req: Request, returnTo = getCurrentAppUrl(req)) {
+  const url = new URL(PORTAL_LOGIN_URL);
+  const appOrigin = getRequestOrigin(req);
+  const safeReturnTo = String(returnTo || "").startsWith(appOrigin) ? String(returnTo) : `${appOrigin}/dashboard`;
+  url.searchParams.set("returnTo", safeReturnTo);
+  return url.toString();
 }
 
 function publicUser(row: any) {
@@ -79,6 +119,74 @@ function setSessionCookie(res: Response, user: AuthUser) {
     secure: process.env.NODE_ENV === "production",
     maxAge: 12 * 60 * 60 * 1000,
   });
+}
+
+async function completePortalLogin(req: Request, res: Response, portalToken: string, returnTo?: string) {
+  if (!PORTAL_SSO_SECRET) {
+    return res.status(500).send("Portal SSO is not configured.");
+  }
+  if (!PORTAL_SSO_AUDIENCE) {
+    return res.status(500).send("Portal SSO audience/app slug is not configured.");
+  }
+
+  let decoded: any;
+  try {
+    decoded = jwt.verify(portalToken, PORTAL_SSO_SECRET, {
+      algorithms: getPortalAlgorithms(),
+      issuer: PORTAL_SSO_ISSUER,
+      audience: PORTAL_SSO_AUDIENCE,
+    });
+  } catch (error) {
+    await writeLog("Portal SSO Failed", "Rejected invalid Portal SSO token", "ERROR").catch(() => {});
+    return res.status(401).send("Invalid or expired Portal SSO token.");
+  }
+
+  const email = String(decoded.email || "").trim().toLowerCase();
+  const name = String(decoded.name || decoded.fullName || email.split("@")[0] || "VIA User").trim();
+  const role = normalizePortalRole(decoded.role);
+
+  if (!email || !isAllowedEmail(email)) {
+    await writeLog("Portal SSO Failed", `Rejected Portal SSO email ${email || "(missing)"}`, "ERROR").catch(() => {});
+    return res.status(403).send(domainError());
+  }
+
+  const existing = await query(`select * from users where lower(email) = lower($1)`, [email]);
+  let row = existing.rows[0];
+
+  if (row?.status === "Inactive") {
+    await writeLog("Portal SSO Blocked", `Inactive user ${email} attempted Portal SSO`, "ERROR").catch(() => {});
+    return res.status(403).send("This user account is inactive.");
+  }
+
+  if (!row) {
+    const passwordHash = await bcrypt.hash(uuidv4(), 12);
+    const inserted = await query(
+      `insert into users (name, email, password_hash, role, status, last_login)
+       values ($1, $2, $3, $4, 'Active', now())
+       returning *`,
+      [name, email, passwordHash, role],
+    );
+    row = inserted.rows[0];
+    await writeLog("Portal SSO User Created", `Created local user ${email} from VIA Portal`);
+  } else {
+    const updated = await query(
+      `update users
+       set name = $1, role = $2, last_login = now(), updated_at = now()
+       where id = $3
+       returning *`,
+      [name || row.name, role, row.id],
+    );
+    row = updated.rows[0];
+    await writeLog("Portal SSO Login", `User ${email} signed in via VIA Portal`);
+  }
+
+  const user = publicUser(row) as AuthUser;
+  setSessionCookie(res, user);
+
+  const safeReturnTo = returnTo && String(returnTo).startsWith(getRequestOrigin(req))
+    ? String(returnTo)
+    : cleanPortalTokenUrl(req);
+  return res.redirect(safeReturnTo);
 }
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
@@ -221,8 +329,47 @@ async function startServer() {
     }),
   );
 
+  app.get("/auth/portal/login", (req, res) => {
+    const returnTo = String(req.query.returnTo || req.query.return_to || getRequestOrigin(req) + "/dashboard");
+    return res.redirect(getPortalLoginRedirect(req, returnTo));
+  });
+
+  app.get("/auth/portal/callback", async (req, res) => {
+    const portalToken = String(req.query.portal_token || "");
+    if (!portalToken) return res.status(400).send("Missing portal_token.");
+    return completePortalLogin(req, res, portalToken, String(req.query.returnTo || cleanPortalTokenUrl(req)));
+  });
+
+  app.post("/auth/portal/callback", async (req, res) => {
+    const portalToken = String(req.body?.portal_token || "");
+    if (!portalToken) return res.status(400).json({ error: "Missing portal_token." });
+    return completePortalLogin(req, res, portalToken, String(req.body?.returnTo || getRequestOrigin(req) + "/dashboard"));
+  });
+
+  app.use((req, res, next) => {
+    if (req.method !== "GET") return next();
+    if (!req.query.portal_token) return next();
+    if (req.path.startsWith("/api/") || req.path.startsWith("/auth/portal/")) return next();
+    return completePortalLogin(req, res, String(req.query.portal_token), cleanPortalTokenUrl(req));
+  });
+
+  app.use((req, res, next) => {
+    if (req.method !== "GET") return next();
+    if (req.cookies?.[JWT_COOKIE]) return next();
+    if (req.path === "/emergency-admin") return next();
+    if (req.path.startsWith("/api/") || req.path.startsWith("/auth/") || req.path.startsWith("/assets/")) return next();
+    if (req.path.startsWith("/src/") || req.path.startsWith("/@vite") || req.path.startsWith("/node_modules/")) return next();
+    if (path.extname(req.path)) return next();
+    const accept = String(req.headers.accept || "");
+    if (!accept.includes("text/html")) return next();
+    return res.redirect(getPortalLoginRedirect(req));
+  });
+
   app.post("/api/auth/register", async (req, res) => {
     try {
+      if (DISABLE_VIA_STAFF_PASSWORD_LOGIN) {
+        return res.status(403).json({ error: "Password registration is disabled. Use VIA Portal SSO." });
+      }
       const name = String(req.body.name || "").trim();
       const email = String(req.body.email || "").trim().toLowerCase();
       const password = String(req.body.password || "");
@@ -257,6 +404,9 @@ async function startServer() {
 
   app.post("/api/auth/login", async (req, res) => {
     try {
+      if (DISABLE_VIA_STAFF_PASSWORD_LOGIN) {
+        return res.status(403).json({ error: "Password login is disabled. Use VIA Portal SSO." });
+      }
       const email = String(req.body.email || "").trim().toLowerCase();
       const password = String(req.body.password || "");
       if (!isAllowedEmail(email)) return res.status(401).json({ error: domainError() });
@@ -274,6 +424,35 @@ async function startServer() {
       const user = publicUser(updated.rows[0]) as AuthUser;
       setSessionCookie(res, user);
       await writeLog("User Login", `User ${email} signed in`);
+      return res.json({ success: true, user });
+    } catch (error: any) {
+      return res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/auth/emergency-login", async (req, res) => {
+    try {
+      if (!EMERGENCY_ADMIN_LOGIN_ENABLED) {
+        return res.status(403).json({ error: "Emergency admin login is disabled." });
+      }
+      const email = String(req.body.email || "").trim().toLowerCase();
+      const password = String(req.body.password || "");
+      if (!isAllowedEmail(email)) return res.status(401).json({ error: domainError() });
+      const result = await query(`select * from users where lower(email) = lower($1)`, [email]);
+      const userRow = result.rows[0];
+      if (!userRow) return res.status(401).json({ error: "No admin exists with this email address." });
+      if (userRow.role !== "Admin") return res.status(403).json({ error: "Emergency login is restricted to admins." });
+      if (userRow.status === "Inactive") return res.status(403).json({ error: "This user account is inactive." });
+
+      const ok = await bcrypt.compare(password, userRow.password_hash);
+      if (!ok) return res.status(401).json({ error: "Incorrect password." });
+
+      const updated = await query(`update users set last_login = now(), updated_at = now() where id = $1 returning *`, [
+        userRow.id,
+      ]);
+      const user = publicUser(updated.rows[0]) as AuthUser;
+      setSessionCookie(res, user);
+      await writeLog("Emergency Admin Login", `Admin ${email} signed in through emergency login`);
       return res.json({ success: true, user });
     } catch (error: any) {
       return res.status(500).json({ error: error.message });

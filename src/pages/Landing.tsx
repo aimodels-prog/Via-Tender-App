@@ -1,5 +1,5 @@
 import { ArrowRight, Eye, Lock, Mail } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { api } from "../lib/api";
@@ -20,9 +20,9 @@ function ViaLogo() {
   );
 }
 
-export default function Landing() {
+export default function Landing({ emergencyAdmin = false }: { emergencyAdmin?: boolean }) {
   const navigate = useNavigate();
-  const { login, register } = useAuth();
+  const { login, emergencyLogin, register } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
   const [fullName, setFullName] = useState("");
@@ -31,11 +31,26 @@ export default function Landing() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
 
+  useEffect(() => {
+    if (emergencyAdmin) return;
+    window.location.replace(`/auth/portal/login?returnTo=${encodeURIComponent(window.location.href)}`);
+  }, [emergencyAdmin]);
+
+  if (!emergencyAdmin) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50 text-sm font-medium text-slate-500">
+        Redirecting to VIA Portal...
+      </div>
+    );
+  }
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
     let result;
-    if (isRegistering) {
+    if (emergencyAdmin) {
+      result = await emergencyLogin(email, password);
+    } else if (isRegistering) {
       if (password !== confirmPassword) {
         setError("Passwords do not match.");
         return;
@@ -106,17 +121,19 @@ export default function Landing() {
 
             <div className="mt-9 text-center lg:mt-0 lg:text-left">
               <h2 className="text-3xl font-bold tracking-tight text-slate-950">
-                {isRegistering ? "Create account" : "Sign in"}
+                {emergencyAdmin ? "Emergency admin" : isRegistering ? "Create account" : "Sign in"}
               </h2>
               <p className="mt-2 text-sm text-slate-500">
-                {isRegistering
+                {emergencyAdmin
+                  ? "Reserved for admin recovery when VIA Portal SSO is unavailable."
+                  : isRegistering
                   ? "Create your own private login for VIA CV Generation."
                   : "Enter your credentials to access your workspace."}
               </p>
             </div>
 
             <form onSubmit={handleSubmit} className="mt-8 space-y-5">
-              {isRegistering && (
+              {!emergencyAdmin && isRegistering && (
                 <label className="block">
                   <span className="text-sm font-semibold text-slate-700">Full name</span>
                   <div className="mt-2 flex h-12 items-center gap-3 rounded-md border border-slate-300 bg-white px-3 shadow-sm transition focus-within:border-[#004b87] focus-within:ring-4 focus-within:ring-blue-100">
@@ -167,7 +184,7 @@ export default function Landing() {
                 </div>
               </label>
 
-              {isRegistering && (
+              {!emergencyAdmin && isRegistering && (
                 <label className="block">
                   <span className="text-sm font-semibold text-slate-700">Confirm password</span>
                   <div className="mt-2 flex h-12 items-center gap-3 rounded-md border border-slate-300 bg-white px-3 shadow-sm transition focus-within:border-[#004b87] focus-within:ring-4 focus-within:ring-blue-100">
@@ -183,7 +200,7 @@ export default function Landing() {
                 </label>
               )}
 
-              {!isRegistering && (
+              {!emergencyAdmin && !isRegistering && (
               <div className="flex items-center justify-between gap-4">
                 <label className="flex items-center gap-2 text-sm text-slate-600">
                   <input
@@ -209,11 +226,12 @@ export default function Landing() {
                 type="submit"
                 className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-md bg-[#004b87] px-5 text-sm font-bold text-white shadow-lg shadow-blue-950/20 transition hover:bg-[#003b6c]"
               >
-                {isRegistering ? "Create Account" : "Sign In"}
+                {emergencyAdmin ? "Emergency Sign In" : isRegistering ? "Create Account" : "Sign In"}
                 <ArrowRight size={17} />
               </button>
             </form>
 
+            {!emergencyAdmin && (
             <div className="mt-6 text-center text-sm text-slate-600">
               {isRegistering ? "Already have an account?" : "Need an account?"}
               <button
@@ -227,6 +245,7 @@ export default function Landing() {
                 {isRegistering ? "Sign in" : "Create account"}
               </button>
             </div>
+            )}
           </div>
         </div>
       </section>

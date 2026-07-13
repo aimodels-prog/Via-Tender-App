@@ -17,6 +17,7 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  emergencyLogin: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   register: (values: {
     name: string;
     email: string;
@@ -66,11 +67,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const portalToken = params.get("portal_token");
+    if (portalToken) {
+      const cleanUrl = new URL(window.location.href);
+      cleanUrl.searchParams.delete("portal_token");
+      window.location.replace(`/auth/portal/callback?portal_token=${encodeURIComponent(portalToken)}&returnTo=${encodeURIComponent(cleanUrl.toString())}`);
+      return;
+    }
     refreshUser();
   }, []);
 
   const login = async (email: string, password: string) => {
     const result = await authRequest("/api/auth/login", { email, password });
+    if (!result.success) return { success: false, error: result.error };
+    setCurrentUser(normalizeUser(result.user));
+    window.dispatchEvent(new Event("authChanged"));
+    window.dispatchEvent(new Event("settingsUpdated"));
+    return { success: true };
+  };
+
+  const emergencyLogin = async (email: string, password: string) => {
+    const result = await authRequest("/api/auth/emergency-login", { email, password });
     if (!result.success) return { success: false, error: result.error };
     setCurrentUser(normalizeUser(result.user));
     window.dispatchEvent(new Event("authChanged"));
@@ -115,6 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isAuthenticated: !!currentUser,
       isLoading,
       login,
+      emergencyLogin,
       register,
       logout,
       refreshUser,
