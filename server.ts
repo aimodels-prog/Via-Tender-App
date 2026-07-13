@@ -35,11 +35,11 @@ declare global {
 const JWT_COOKIE = "via_session";
 const JWT_SECRET = process.env.JWT_SECRET || "dev-only-change-before-production";
 const ALLOWED_EMAIL_DOMAIN = (process.env.ALLOWED_EMAIL_DOMAIN || "via-int.com").trim().toLowerCase();
-const PORTAL_LOGIN_URL = process.env.PORTAL_LOGIN_URL || "https://portal.via-int.com/auth/google";
+const PORTAL_ENTRY_URL = process.env.PORTAL_ENTRY_URL || process.env.PORTAL_LOGIN_URL || "https://portal.via-int.com";
 const PORTAL_SSO_SECRET = process.env.PORTAL_SSO_SECRET || "";
 const PORTAL_SSO_ISSUER = process.env.PORTAL_SSO_ISSUER || "via-portal";
 const PORTAL_SSO_AUDIENCE = process.env.PORTAL_SSO_AUDIENCE || process.env.PORTAL_SSO_APP_SLUG || "";
-const PORTAL_POST_LOGOUT_URL = process.env.PORTAL_POST_LOGOUT_URL || new URL(PORTAL_LOGIN_URL).origin;
+const PORTAL_HOME_URL = process.env.PORTAL_HOME_URL || process.env.PORTAL_POST_LOGOUT_URL || new URL(PORTAL_ENTRY_URL).origin;
 const DISABLE_VIA_STAFF_PASSWORD_LOGIN = process.env.DISABLE_VIA_STAFF_PASSWORD_LOGIN !== "false";
 const EMERGENCY_ADMIN_LOGIN_ENABLED = process.env.EMERGENCY_ADMIN_LOGIN_ENABLED !== "false";
 
@@ -79,7 +79,7 @@ function normalizePortalRole(role: any): "Admin" | "User" {
 }
 
 function getPortalLoginRedirect(req: Request, returnTo = getCurrentAppUrl(req)) {
-  const url = new URL(PORTAL_LOGIN_URL);
+  const url = new URL(PORTAL_ENTRY_URL);
   const appOrigin = getRequestOrigin(req);
   const safeReturnTo = String(returnTo || "").startsWith(appOrigin) ? String(returnTo) : `${appOrigin}/dashboard`;
   url.searchParams.set("returnTo", safeReturnTo);
@@ -483,7 +483,7 @@ async function startServer() {
 
   app.post("/api/auth/logout", (_req, res) => {
     res.clearCookie(JWT_COOKIE);
-    res.json({ success: true, redirectTo: PORTAL_POST_LOGOUT_URL });
+    res.json({ success: true, redirectTo: PORTAL_HOME_URL });
   });
 
   app.get("/api/stats", requireAuth, async (_req, res) => {
