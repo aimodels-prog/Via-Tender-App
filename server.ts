@@ -254,7 +254,27 @@ function withData(row: any) {
 
 function normalizeDeadline(value: any) {
   if (!value) return null;
-  const date = new Date(value);
+  const raw = String(value).trim();
+  let date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    const cleaned = raw
+      .replace(/(\d{1,2})(?:st|nd|rd|th)\b/gi, "$1")
+      .replace(/\bat\b/gi, " ")
+      .replace(/\blocal\s*time\b/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const match = cleaned.match(/\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December),?\s+(\d{4})(?:\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?/i);
+    if (match) {
+      const months = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+      let hour = Number(match[4] || 0);
+      const meridiem = String(match[6] || "").toLowerCase();
+      if (meridiem === "pm" && hour < 12) hour += 12;
+      if (meridiem === "am" && hour === 12) hour = 0;
+      date = new Date(Date.UTC(Number(match[3]), months.indexOf(match[2].toLowerCase()), Number(match[1]), hour, Number(match[5] || 0)));
+    } else {
+      date = new Date(cleaned);
+    }
+  }
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
@@ -968,6 +988,12 @@ async function startServer() {
     }
     if (!Array.isArray(data.positions) || data.positions.length === 0) {
       return res.status(400).json({ error: "Cannot save tender because no positions were extracted." });
+    }
+    if (Array.isArray(data.extraction_blocking_issues) && data.extraction_blocking_issues.length > 0) {
+      return res.status(422).json({
+        error: `Cannot save this extraction until critical quality issues are resolved: ${data.extraction_blocking_issues.join(" ")}`,
+        blockingIssues: data.extraction_blocking_issues,
+      });
     }
     await query(
       `insert into tenders (id, tender_title, client, status, deadline, data)

@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { X, Save, AlertCircle, Loader2, Image as ImageIcon, Plus, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
-import { getTenderPositionWarnings } from '../lib/tenderPostProcess';
+import { getTenderPositionWarnings, normalizeTenderRecord } from '../lib/tenderPostProcess';
 
 interface ConfirmTenderModalProps {
   tender: any;
@@ -14,13 +14,6 @@ interface ConfirmTenderModalProps {
 const toArray = (value: any): string[] => Array.isArray(value) ? value.map(item => String(item || '').trim()).filter(Boolean) : value ? [String(value).trim()].filter(Boolean) : [];
 const joinLines = (value: any) => toArray(value).join('\n');
 const splitLines = (value: string) => value.split('\n').map(item => item.trim()).filter(Boolean);
-const joinEvidence = (value: any) => (Array.isArray(value) ? value : [])
-  .map((item: any) => `${item.field || ''} | ${item.page_number || ''} | ${item.quote || ''}`)
-  .join('\n');
-const splitEvidence = (value: string) => value.split('\n').map((line) => {
-  const [field = '', page = '', ...quote] = line.split('|');
-  return { field: field.trim(), page_number: Number(page.trim()), quote: quote.join('|').trim() };
-}).filter((item) => item.field && Number.isInteger(item.page_number) && item.page_number > 0 && item.quote);
 
 export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderModalProps) {
   const [editedTender, setEditedTender] = useState({
@@ -39,11 +32,14 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
   const [savedBranding, setSavedBranding] = useState({ header_base64: "", footer_base64: "", header_name: "", footer_name: "" });
   const [brandingSelection, setBrandingSelection] = useState("default");
   const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
+  const normalizedForReview = useMemo(() => normalizeTenderRecord(editedTender), [editedTender]);
+  const blockingIssues = toArray(normalizedForReview.extraction_blocking_issues);
+  const isTechnicalAuditWarning = (warning: string) => /(?:source page evidence|field-level evidence)/i.test(warning);
   const positionWarnings = useMemo(
-    () => editedTender.positions.map((position: any) => getTenderPositionWarnings(position)),
-    [editedTender.positions],
+    () => normalizedForReview.positions.map((position: any) => getTenderPositionWarnings(position).filter((warning) => !isTechnicalAuditWarning(warning))),
+    [normalizedForReview.positions],
   );
-  const tenderWarnings = toArray(editedTender.extraction_warnings).filter((warning) =>
+  const tenderWarnings = toArray(normalizedForReview.extraction_warnings).filter((warning) => !isTechnicalAuditWarning(warning) &&
     !positionWarnings.some((warnings: string[]) => warnings.some((positionWarning) => warning.endsWith(positionWarning))),
   );
   const warningCount = positionWarnings.reduce((count: number, warnings: string[]) => count + warnings.length, 0) + tenderWarnings.length;
@@ -125,12 +121,16 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
       alert("No tender positions were extracted. Please re-upload the tender and wait for extraction to complete before saving.");
       return;
     }
+    if (blockingIssues.length > 0) {
+      alert(`Critical extraction issues must be resolved before saving: ${blockingIssues.join(' ')}`);
+      return;
+    }
     if (warningCount > 0 && !warningsAcknowledged) {
       alert("Review the extraction warnings and acknowledge them before saving.");
       return;
     }
     setIsSaving(true);
-    await onSave(editedTender);
+    await onSave(normalizedForReview);
     setIsSaving(false);
   };
 
@@ -159,27 +159,20 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
         </div>
 
         <div className="flex-1 overflow-y-auto overflow-x-hidden p-6 space-y-8">
+          {blockingIssues.length > 0 && (
+            <div className="border border-red-300 bg-red-50 rounded-lg p-4 text-sm text-red-900">
+              <p className="font-semibold">Extraction cannot be saved yet</p>
+              <ul className="mt-2 list-disc pl-5 space-y-1">
+                {blockingIssues.map((issue, index) => <li key={index}>{issue}</li>)}
+              </ul>
+            </div>
+          )}
           {tenderWarnings.length > 0 && (
             <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 text-sm text-amber-900">
               <p className="font-semibold">Extraction needs attention</p>
               <ul className="mt-2 list-disc pl-5 space-y-1">
                 {tenderWarnings.map((warning, index) => <li key={index}>{warning}</li>)}
               </ul>
-            </div>
-          )}
-          {editedTender.extraction_audit?.pageRouting && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 border border-slate-200 bg-slate-50 rounded-lg p-4">
-              {[
-                ['Pages classified', editedTender.extraction_audit.pageRouting.pagesClassified],
-                ['Pages sent to Pro', editedTender.extraction_audit.pageRouting.pagesSentToPro],
-                ['Pages skipped by Pro', editedTender.extraction_audit.pageRouting.pagesSkippedByPro],
-                ['Pro reduction', `${editedTender.extraction_audit.pageRouting.proReductionPercent}%`],
-              ].map(([label, value]) => (
-                <div key={String(label)}>
-                  <p className="text-[10px] font-semibold uppercase text-slate-500">{label}</p>
-                  <p className="mt-1 text-lg font-bold text-slate-900">{value}</p>
-                </div>
-              ))}
             </div>
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -208,15 +201,6 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                 type="text" 
                 value={editedTender.client}
                 onChange={e => setEditedTender({...editedTender, client: e.target.value})}
-                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Document Format / Source</label>
-              <input 
-                type="text" 
-                value={editedTender.tender_format}
-                onChange={e => setEditedTender({...editedTender, tender_format: e.target.value})}
                 className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
               />
             </div>
@@ -295,29 +279,6 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
               ))}
             </div>
 
-            <details className="border border-slate-200 rounded-lg bg-slate-50">
-              <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700">
-                Page coverage ({editedTender.page_classifications?.length || 0} classified pages)
-              </summary>
-              <div className="border-t border-slate-200 max-h-72 overflow-auto divide-y divide-slate-200">
-                {(editedTender.page_classifications || []).map((page: any) => (
-                  <div key={page.page_number} className="px-4 py-3 text-xs text-slate-700 grid grid-cols-[60px_100px_1fr] gap-3">
-                    <span className="font-semibold">Page {page.page_number}</span>
-                    <span className={page.readability === 'CLEAR' ? 'text-emerald-700' : 'text-amber-700'}>{page.readability}</span>
-                    <span>{joinLines(page.categories).replace(/\n/g, ', ')}{page.summary ? `: ${page.summary}` : ''}</span>
-                  </div>
-                ))}
-              </div>
-            </details>
-            <div className="space-y-2">
-              <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Tender field evidence</label>
-              <textarea
-                value={joinEvidence(editedTender.tender_field_evidence)}
-                placeholder="field | page | exact source quote"
-                onChange={e => setEditedTender({ ...editedTender, tender_field_evidence: splitEvidence(e.target.value) })}
-                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-mono focus:border-blue-500 outline-none min-h-[120px]"
-              />
-            </div>
           </div>
 
           <div>
@@ -389,13 +350,9 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                   </div>
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                     {[
-                      ['source_position_number', 'Source Position No.', 'number'],
-                      ['source_document', 'Source Document', 'text'],
                       ['lot_reference', 'Lot / Package', 'text'],
-                      ['expert_category', 'Expert Category', 'text'],
                       ['input_months', 'Input Months', 'number'],
                       ['work_location', 'Work Location', 'text'],
-                      ['residency_requirement', 'Residency Requirement', 'text'],
                       ['minimum_specific_years', 'Specific Years', 'number'],
                       ['minimum_similar_projects', 'Similar Projects', 'number'],
                       ['evaluation_points', 'Evaluation Points', 'number'],
@@ -488,36 +445,6 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                     ))}
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Source pages</label>
-                      <input
-                        type="text"
-                        value={(pos.source_page_numbers || []).join(', ')}
-                        placeholder="No source pages attached"
-                        onChange={e => handlePositionChange(idx, 'source_page_numbers', e.target.value.split(',').map((value: string) => Number(value.trim())).filter((value: number) => Number.isInteger(value) && value > 0))}
-                        className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none"
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Source evidence</label>
-                      <textarea
-                        value={joinLines(pos.source_quotes)}
-                        placeholder="Exact quotations proving this position"
-                        onChange={e => handlePositionChange(idx, 'source_quotes', splitLines(e.target.value))}
-                        className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none min-h-[60px]"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-1 mt-4">
-                    <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Field-level evidence</label>
-                    <textarea
-                      value={joinEvidence(pos.field_evidence)}
-                      placeholder="field | page | exact source quote"
-                      onChange={e => handlePositionChange(idx, 'field_evidence', splitEvidence(e.target.value))}
-                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm font-mono focus:border-blue-500 outline-none min-h-[110px]"
-                    />
-                  </div>
                 </div>
               ))}
               
@@ -602,7 +529,7 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
           </button>
           <button 
             onClick={handleSave}
-            disabled={isSaving || !Array.isArray(editedTender.positions) || editedTender.positions.length === 0}
+            disabled={isSaving || blockingIssues.length > 0 || !Array.isArray(editedTender.positions) || editedTender.positions.length === 0}
             className="flex items-center gap-2 px-6 py-2.5 rounded-lg text-sm font-medium bg-[#2563eb] hover:bg-blue-700 text-white transition-colors shadow-sm disabled:opacity-50"
           >
             {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}

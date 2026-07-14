@@ -4,7 +4,7 @@ import { PDFParse } from "pdf-parse";
 import { extractUniversalCVFacts, extractUniversalTenderFacts } from "../src/lib/universalExtraction.ts";
 import { normalizeExpertCollections, postProcessExtractedExpert } from "../src/lib/cvPostProcess.ts";
 import { normalizeTenderRecord } from "../src/lib/tenderPostProcess.ts";
-import { mergeTenderExtractions, selectTenderPagesForPro } from "../src/backend/ai.ts";
+import { getTenderTableContextsForRange, mergeTenderExtractions, reconcileTenderEvidencePages, selectTenderPagesForPro, validateTenderFieldSemantics } from "../src/backend/ai.ts";
 
 async function readDocxText(path: string) {
   const result = await mammoth.extractRawText({ buffer: fs.readFileSync(path) });
@@ -171,6 +171,131 @@ async function main() {
   ]);
   if (repeatedTitleTender.positions.length !== 2) throw new Error("Same-title positions from separate lots must remain separate.");
 
+  const segmentedRoleTender = normalizeTenderRecord({
+    extraction_warnings: [
+      "K-1: Senior Highway Design Engineer /Team Leader for Design Update: Education requirement was not extracted.",
+      "Page classification missing for page 99.",
+    ],
+    positions: [
+      {
+        position_title: "K-1: Senior Highway Design Engineer /Team Leader for Design Update",
+        quantity: 1,
+        expert_category: "Key Expert",
+        source_page_numbers: [35],
+        source_quotes: ["Should have a minimum of a Master's Degree in Civil Engineering, Highways, Geotechnical Engineering"],
+        minimum_education: "Should have a minimum of a Master's Degree in Civil Engineering, Highways, Geotechnical Engineering",
+        general_experience: "Minimum 10 years postgraduate experience in road design.",
+        specific_experience: "At least three similar urban road projects.",
+      },
+      {
+        position_title: "Senior Highway Design Engineer / Team Leader for Design Update",
+        general_experience: "Minimum 15 years postgraduate experience in road design and construction supervision.",
+        role_description: "Lead the design review activities and coordinate the design team.",
+        source_page_numbers: [94],
+      },
+      {
+        position_title: "Senior Highway Design Engineer/Team Leader for Design Update",
+        source_position_number: 1,
+      },
+      {
+        position_title: "K-5 Hydrologist/Drainage Engineer",
+        source_page_numbers: [36],
+        source_quotes: ["Should have a minimum of a BSc Civil Engineering; Registered Engineer with a valid practicing licence."],
+        minimum_education: "Should have a minimum of a BSc Civil Engineering; Registered Engineer with a valid practicing licence.",
+        specific_experience: "Five years as a Drainage Engineer.",
+      },
+      {
+        position_title: "Hydrologist/ Drainage Engineer (Supervision)",
+        general_experience: "Minimum 10 years in water resources engineering and hydrology.",
+        role_description: "Perform hydrological analysis and review road drainage designs.",
+        source_page_numbers: [97],
+      },
+      {
+        position_title: "Senior Land Surveyor",
+        source_page_numbers: [36],
+        source_quotes: ["Minimum BSc in Surveying or Geomatics."],
+        minimum_education: "Minimum BSc in Surveying or Geomatics.",
+        general_experience: "At least 10 years surveying road construction projects.",
+      },
+      {
+        position_title: "Senior Surveyor",
+        role_description: "Prepare survey work and advise the Team Leader on setting out the alignment.",
+        source_page_numbers: [95],
+      },
+    ],
+  });
+  if (segmentedRoleTender.positions.length !== 3) {
+    throw new Error(`Expected segmented role fragments to merge into 3 positions, got ${segmentedRoleTender.positions.length}.`);
+  }
+  const mergedHighwayRole = segmentedRoleTender.positions.find((position: any) => /Highway Design Engineer/i.test(position.position_title));
+  if (!mergedHighwayRole?.minimum_education?.includes("Master")) throw new Error("Expected explicitly extracted education to survive role consolidation.");
+  if (!mergedHighwayRole?.role_description?.includes("design review")) throw new Error("Expected detailed role duties to merge into the role-register entry.");
+  if (!mergedHighwayRole?.general_experience?.includes("15 years")) throw new Error("Conflicting experience requirements must retain the stricter explicit minimum.");
+  if (segmentedRoleTender.extraction_warnings.some((warning: string) => /Education requirement was not extracted/i.test(warning))) {
+    throw new Error(`Resolved position warnings must not survive later normalization passes: ${JSON.stringify(segmentedRoleTender.extraction_warnings)}`);
+  }
+  if (!segmentedRoleTender.extraction_warnings.some((warning: string) => /Page classification missing/i.test(warning))) {
+    throw new Error("Non-position extraction warnings must be retained.");
+  }
+  const evidenceOnlyEducation = normalizeTenderRecord({ positions: [{
+    position_title: "Road Engineer",
+    source_page_numbers: [2],
+    source_quotes: ["Bachelor's Degree in Civil Engineering"],
+  }] });
+  if (evidenceOnlyEducation.positions[0].minimum_education) {
+    throw new Error("Internal evidence must validate facts, not silently populate missing business fields.");
+  }
+  const semanticFieldIssues = validateTenderFieldSemantics({ positions: [
+    { position_title: "K-1: Resident Engineer", quantity: 1, minimum_education: "Bachelor's Degree in Civil Engineering", role_description: "Supervise construction works." },
+    { position_title: "Materials Engineer 2 No.", quantity: 2 },
+    { position_title: "Bachelor's Degree and 15 years of experience" },
+  ] });
+  if (semanticFieldIssues.length < 3) throw new Error("Semantic field validation must reject codes, quantities, and requirements inside position titles.");
+  const cleanSemanticFields = validateTenderFieldSemantics({ positions: [{
+    position_title: "Resident Engineer",
+    source_position_number: 1,
+    quantity: 1,
+    minimum_education: "Bachelor's Degree in Civil Engineering",
+    general_experience: "Minimum 15 years of professional experience.",
+    specific_experience: "At least 5 years supervising urban road construction.",
+    role_description: "Supervise construction works and administer the contract.",
+    field_evidence: [
+      { field: "position_title", page_number: 1, quote: "K-1 Resident Engineer" },
+      { field: "quantity", page_number: 1, quote: "Resident Engineer 1 No." },
+      { field: "minimum_education", page_number: 1, quote: "Bachelor's Degree in Civil Engineering" },
+      { field: "general_experience", page_number: 1, quote: "Minimum 15 years of professional experience" },
+      { field: "specific_experience", page_number: 1, quote: "At least 5 years supervising urban road construction" },
+      { field: "role_description", page_number: 1, quote: "Supervise construction works and administer the contract" },
+    ],
+  }] });
+  if (cleanSemanticFields.length) throw new Error(`Valid semantic field mapping was rejected: ${cleanSemanticFields.join(" ")}`);
+  const continuedTableContexts = [{
+    table_title: "Key Personnel Requirements",
+    header_page: 40,
+    first_data_page: 40,
+    last_data_page: 46,
+    columns: [
+      { header: "Position", meaning: "position_title" },
+      { header: "Qualification", meaning: "minimum_education" },
+      { header: "Experience", meaning: "general_experience and specific_experience" },
+    ],
+    continues_after_chunk: false,
+  }];
+  if (getTenderTableContextsForRange(continuedTableContexts, 44, 45).length !== 1) {
+    throw new Error("Headerless continuation pages must inherit the active table header context.");
+  }
+  if (getTenderTableContextsForRange(continuedTableContexts, 47, 50).length !== 0) {
+    throw new Error("Table header context must stop after the table's final page.");
+  }
+
+  const metadataPrecedenceTender = mergeTenderExtractions([
+    { tender_title: "Authoritative Cover Title", client: "Procuring Entity", positions: [{ position_title: "Road Engineer", source_page_numbers: [1] }] },
+    { tender_title: "A much longer but incorrect contract subsection heading that must not replace the cover title", client: "A longer organization mentioned in a later background paragraph", positions: [] },
+  ]);
+  if (metadataPrecedenceTender.tender_title !== "Authoritative Cover Title" || metadataPrecedenceTender.client !== "Procuring Entity") {
+    throw new Error("Later contract text must not overwrite earlier tender metadata.");
+  }
+
   const longRequirement = Array.from({ length: 2500 }, (_, index) => `Responsibility ${index + 1}`).join("; ");
   const untruncatedTender = normalizeTenderRecord({ positions: [{ position_title: "Resident Engineer", role_description: longRequirement }] });
   if (untruncatedTender.positions[0].role_description.length < longRequirement.length * 0.9) {
@@ -195,6 +320,25 @@ async function main() {
   if (!routing.skippedPages.includes(20)) throw new Error("Expected high-confidence contract boilerplate to skip Pro extraction.");
   const noClassificationRouting = selectTenderPagesForPro([], 1, 25);
   if (noClassificationRouting.selectedPages.length !== 25) throw new Error("Unclassified pages must always be sent to Pro.");
+
+  const reconciledPages = reconcileTenderEvidencePages({
+    tender_field_evidence: [{ field: "deadline", page_number: 94, quote: "Deadline for proposal submission is 8 January 2025" }],
+    positions: [{
+      position_title: "Senior Laboratory Technician",
+      source_page_numbers: [],
+      source_quotes: ["Senior Laboratory Technician"],
+      field_evidence: [{ field: "minimum_education", page_number: 94, quote: "Higher Diploma in Civil Engineering" }],
+    }],
+  }, [
+    { page_number: 95, text: "Staff schedule: Senior Laboratory Technician (1 No.)" },
+    { page_number: 98, text: "Senior Laboratory Technician - Higher Diploma in Civil Engineering" },
+    { page_number: 100, text: "Deadline for proposal submission is 8 January 2025" },
+  ]);
+  if (reconciledPages.tender_field_evidence[0].page_number !== 100) throw new Error("Tender evidence must use the physical PDF page containing its quote.");
+  if (reconciledPages.positions[0].field_evidence[0].page_number !== 98) throw new Error("Position evidence must use the physical PDF page containing its quote.");
+  if (!reconciledPages.positions[0].source_page_numbers.includes(95) || !reconciledPages.positions[0].source_page_numbers.includes(98)) {
+    throw new Error("Position source pages must be recovered deterministically from titles and quotes.");
+  }
 
   const torPaths = [
     "C:/Users/Dell/Downloads/TOR 2024.OM.RFP.49_1.pdf",

@@ -134,6 +134,66 @@ function cleanTenderEducationRequirement(value: any) {
   return text;
 }
 
+function cleanTenderLocation(value: any) {
+  const text = cleanTenderRequirementText(value);
+  if (/\b(?:implied by|not explicitly|keep (?:this field )?empty|default-free|no (?:direct|exact) deployment location|therefore,? keep|verbatim mentioned)\b/i.test(text)) {
+    return "";
+  }
+  return text;
+}
+
+function canonicalTenderPositionTitle(value: any) {
+  let title = cleanTenderRequirementText(value)
+    .replace(/^\s*K\s*[-.]?\s*\d+\s*[:.)-]?\s*/i, "")
+    .replace(/\s*\((?:supervision|construction|design update|assistant resident engineer)\)\s*/gi, " ")
+    .replace(/\bfor\s+(?:construction activities|design update)\b/gi, " ")
+    .replace(/\bmaterials?\b/gi, "material")
+    .replace(/\bland surveyor\b/gi, "surveyor")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const normalized = title.toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
+  const tokens = Array.from(new Set(normalized.split(/\s+/).filter((token) => token && token !== "and"))).sort();
+  return tokens.join(" ");
+}
+
+function tenderPositionGroupKey(position: any) {
+  const document = cleanText(position?.source_document).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const lot = cleanText(position?.lot_reference).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return `${document}|${lot}|${canonicalTenderPositionTitle(position?.position_title || position?.title || position?.role || "")}`;
+}
+
+function mergeUniqueValues(current: any, next: any) {
+  const values = [...(Array.isArray(current) ? current : []), ...(Array.isArray(next) ? next : [])].filter(Boolean);
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = typeof value === "object" ? JSON.stringify(value) : cleanText(value).toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function richerText(current: any, next: any) {
+  const currentText = cleanTenderRequirementText(current);
+  const nextText = cleanTenderRequirementText(next);
+  if (!currentText) return nextText;
+  if (!nextText) return currentText;
+  return nextText.length > currentText.length ? nextText : currentText;
+}
+
+function stricterExperienceText(current: any, next: any) {
+  const currentText = cleanTenderRequirementText(current);
+  const nextText = cleanTenderRequirementText(next);
+  if (!currentText) return nextText;
+  if (!nextText) return currentText;
+  const maxYears = (text: string) => Math.max(0, ...(text.match(/\b\d{1,2}\s*years?\b/gi) || []).map((value) => Number(value.match(/\d+/)?.[0] || 0)));
+  const currentYears = maxYears(currentText);
+  const nextYears = maxYears(nextText);
+  if (currentYears !== nextYears && currentYears > 0 && nextYears > 0) return nextYears > currentYears ? nextText : currentText;
+  return richerText(currentText, nextText);
+}
+
 function cleanTenderRoleDescription(value: any) {
   const text = cleanTenderRequirementText(value)
     .split(/\bEducation\s*:?\s*\d{0,2}\b/i)[0]
@@ -182,13 +242,25 @@ export function normalizeTenderPosition(position: any, index = 0) {
 
   const rawQuantity = Number(position?.quantity ?? position?.qty);
   const rawMinimumYears = Number(position?.minimum_years_experience ?? position?.min_years_experience);
+  const normalizedEvidence = (Array.isArray(position?.field_evidence) ? position.field_evidence : [])
+    .map((evidence: any) => ({
+      field: cleanTenderRequirementText(evidence?.field || ""),
+      page_number: Number(evidence?.page_number || 0),
+      quote: cleanTenderRequirementText(evidence?.quote || ""),
+    }))
+    .filter((evidence: any) => evidence.field && Number.isInteger(evidence.page_number) && evidence.page_number > 0 && evidence.quote);
+  const sourceQuotes = toArray(position?.source_quotes);
   const sourcePageNumbers = Array.from(
     new Set(
-      (Array.isArray(position?.source_page_numbers) ? position.source_page_numbers : [])
+      [...(Array.isArray(position?.source_page_numbers) ? position.source_page_numbers : []), ...normalizedEvidence.map((item: any) => item.page_number)]
         .map((page: any) => Number(page))
         .filter((page: number) => Number.isInteger(page) && page > 0),
     ),
   );
+  const education = position?.minimum_education || position?.education || "";
+  const generalExperience = position?.general_experience || "";
+  const specificExperience = position?.specific_experience || "";
+  const roleDescription = position?.role_description || position?.description || position?.responsibilities || "";
 
   return {
     ...position,
@@ -200,15 +272,13 @@ export function normalizeTenderPosition(position: any, index = 0) {
     lot_reference: cleanTenderRequirementText(position?.lot_reference || ""),
     expert_category: cleanTenderRequirementText(position?.expert_category || ""),
     input_months: Number.isFinite(Number(position?.input_months)) && Number(position.input_months) >= 0 ? Number(position.input_months) : undefined,
-    work_location: cleanTenderRequirementText(position?.work_location || ""),
-    minimum_education: cleanTenderEducationRequirement(position?.minimum_education || position?.education || ""),
+    work_location: cleanTenderLocation(position?.work_location || ""),
+    minimum_education: cleanTenderEducationRequirement(education),
     minimum_years_experience:
       Number.isFinite(rawMinimumYears) && rawMinimumYears >= 0 ? rawMinimumYears : undefined,
-    general_experience: cleanTenderRequirementText(position?.general_experience || ""),
-    specific_experience: cleanTenderSpecificExperience(position?.specific_experience || ""),
-    role_description: cleanTenderRoleDescription(
-      position?.role_description || position?.description || position?.responsibilities || "",
-    ),
+    general_experience: cleanTenderRequirementText(generalExperience),
+    specific_experience: cleanTenderSpecificExperience(specificExperience),
+    role_description: cleanTenderRoleDescription(roleDescription),
     required_sector_experience: toArray(position?.required_sector_experience),
     mandatory_skills: toArray(position?.mandatory_skills),
     required_software: toArray(position?.required_software),
@@ -223,16 +293,61 @@ export function normalizeTenderPosition(position: any, index = 0) {
     regional_experience: cleanTenderRequirementText(position?.regional_experience || ""),
     country_experience: cleanTenderRequirementText(position?.country_experience || ""),
     source_page_numbers: sourcePageNumbers,
-    source_quotes: toArray(position?.source_quotes),
-    field_evidence: (Array.isArray(position?.field_evidence) ? position.field_evidence : [])
-      .map((evidence: any) => ({
-        field: cleanTenderRequirementText(evidence?.field || ""),
-        page_number: Number(evidence?.page_number || 0),
-        quote: cleanTenderRequirementText(evidence?.quote || ""),
-      }))
-      .filter((evidence: any) => evidence.field && Number.isInteger(evidence.page_number) && evidence.page_number > 0 && evidence.quote),
+    source_quotes: sourceQuotes,
+    field_evidence: normalizedEvidence,
     extraction_warnings: toArray(position?.extraction_warnings),
   };
+}
+
+export function mergeTenderPositions(positions: any[]) {
+  const grouped = new Map<string, any>();
+  (Array.isArray(positions) ? positions : []).forEach((rawPosition, index) => {
+    const position = normalizeTenderPosition(rawPosition, index);
+    const key = tenderPositionGroupKey(position);
+    if (!canonicalTenderPositionTitle(position.position_title)) return;
+    const current = grouped.get(key);
+    if (!current) {
+      grouped.set(key, position);
+      return;
+    }
+
+    grouped.set(key, {
+      ...current,
+      quantity: current.quantity || position.quantity,
+      source_position_number: current.source_position_number || position.source_position_number,
+      source_document: richerText(current.source_document, position.source_document),
+      lot_reference: richerText(current.lot_reference, position.lot_reference),
+      expert_category: richerText(current.expert_category, position.expert_category),
+      is_key_expert: current.is_key_expert ?? position.is_key_expert,
+      input_months: current.input_months || position.input_months,
+      work_location: richerText(current.work_location, position.work_location),
+      minimum_education: richerText(current.minimum_education, position.minimum_education),
+      minimum_years_experience: Math.max(Number(current.minimum_years_experience || 0), Number(position.minimum_years_experience || 0)) || undefined,
+      minimum_specific_years: Math.max(Number(current.minimum_specific_years || 0), Number(position.minimum_specific_years || 0)) || undefined,
+      minimum_similar_projects: current.minimum_similar_projects || position.minimum_similar_projects,
+      general_experience: stricterExperienceText(current.general_experience, position.general_experience),
+      specific_experience: stricterExperienceText(current.specific_experience, position.specific_experience),
+      role_description: richerText(current.role_description, position.role_description),
+      required_sector_experience: mergeUniqueValues(current.required_sector_experience, position.required_sector_experience),
+      mandatory_skills: mergeUniqueValues(current.mandatory_skills, position.mandatory_skills),
+      required_software: mergeUniqueValues(current.required_software, position.required_software),
+      required_certifications: mergeUniqueValues(current.required_certifications, position.required_certifications),
+      professional_memberships: mergeUniqueValues(current.professional_memberships, position.professional_memberships),
+      required_languages: mergeUniqueValues(current.required_languages, position.required_languages),
+      position_deliverables: mergeUniqueValues(current.position_deliverables, position.position_deliverables),
+      required_keywords: mergeUniqueValues(current.required_keywords, position.required_keywords),
+      nationality_preference: richerText(current.nationality_preference, position.nationality_preference),
+      residency_requirement: richerText(current.residency_requirement, position.residency_requirement),
+      regional_experience: richerText(current.regional_experience, position.regional_experience),
+      country_experience: richerText(current.country_experience, position.country_experience),
+      evaluation_points: current.evaluation_points || position.evaluation_points,
+      source_page_numbers: mergeUniqueValues(current.source_page_numbers, position.source_page_numbers).map(Number).sort((a, b) => a - b),
+      source_quotes: mergeUniqueValues(current.source_quotes, position.source_quotes),
+      field_evidence: mergeUniqueValues(current.field_evidence, position.field_evidence),
+      extraction_warnings: mergeUniqueValues(current.extraction_warnings, position.extraction_warnings),
+    });
+  });
+  return Array.from(grouped.values());
 }
 
 export function isInvalidTenderPositionTitle(value: string) {
@@ -312,8 +427,7 @@ function isInvalidTenderPosition(position: any) {
 
 export function normalizeTenderRecord(tender: any) {
   const positions = Array.isArray(tender?.positions) ? tender.positions : [];
-  const normalizedPositions = positions
-    .map((position, index) => normalizeTenderPosition(position, index))
+  const normalizedPositions = mergeTenderPositions(positions)
     .filter((position) => position.position_title && !isInvalidTenderPosition(position));
 
   const extractionWarnings = normalizedPositions.flatMap((position) =>
@@ -351,11 +465,59 @@ export function normalizeTenderRecord(tender: any) {
     .filter((field) => !tenderEvidenceFields.has(field))
     .forEach((field) => extractionWarnings.push(`Tender: Missing field-level evidence for ${field}.`));
 
+  const retainedWarnings = toArray(tender?.extraction_warnings).filter((warning) => !/(?:Quantity was not found in the source|Education requirement was not extracted|Experience requirements were not extracted|Responsibilities were not extracted|No source page evidence is attached|Missing field-level evidence for:)/i.test(warning));
+  const explicitClientEvidence = tenderFieldEvidence
+    .filter((item: any) => item.field.toLowerCase() === "client")
+    .map((item: any) => item.quote.match(/\bProcuring and Disposing Entity is\s*:\s*(.+)$/i)?.[1]?.trim())
+    .find(Boolean);
+  const roleCount = normalizedPositions.length;
+  const sourceBackedCount = normalizedPositions.filter((position) => position.source_page_numbers.length > 0).length;
+  const completeCoreCount = normalizedPositions.filter((position) =>
+    cleanText(position.minimum_education) &&
+    (cleanText(position.general_experience) || cleanText(position.specific_experience)) &&
+    cleanText(position.role_description),
+  ).length;
+  const incompleteCorePositions = normalizedPositions
+    .map((position) => ({
+      title: cleanText(position.position_title),
+      missing: [
+        !cleanText(position.minimum_education) ? "education" : "",
+        !cleanText(position.general_experience) && !cleanText(position.specific_experience) ? "experience" : "",
+        !cleanText(position.role_description) ? "responsibilities" : "",
+      ].filter(Boolean),
+    }))
+    .filter((item) => item.missing.length > 0);
+  const missingCoreEvidencePositions = normalizedPositions
+    .map((position) => {
+      const evidenceFields = new Set((Array.isArray(position?.field_evidence) ? position.field_evidence : []).map((item: any) => cleanText(item?.field).toLowerCase()));
+      const missing = [
+        cleanText(position.position_title) && !evidenceFields.has("position_title") ? "position_title" : "",
+        position.quantity !== undefined && !evidenceFields.has("quantity") ? "quantity" : "",
+        cleanText(position.minimum_education) && !evidenceFields.has("minimum_education") ? "minimum_education" : "",
+        cleanText(position.general_experience) && !evidenceFields.has("general_experience") ? "general_experience" : "",
+        cleanText(position.specific_experience) && !evidenceFields.has("specific_experience") ? "specific_experience" : "",
+        cleanText(position.role_description) && !evidenceFields.has("role_description") ? "role_description" : "",
+      ].filter(Boolean);
+      return { title: cleanText(position.position_title), missing };
+    })
+    .filter((item) => item.missing.length > 0);
+  const blockingIssues: string[] = [];
+  if (!roleCount) blockingIssues.push("No real tender personnel positions were extracted.");
+  if (roleCount >= 3 && sourceBackedCount / roleCount < 0.5) {
+    blockingIssues.push("Fewer than half of the extracted positions have source-page evidence.");
+  }
+  if (incompleteCorePositions.length) {
+    blockingIssues.push(`Some positions are missing core requirements: ${incompleteCorePositions.slice(0, 10).map((item) => `${item.title || "Untitled"} missing ${item.missing.join(", ")}`).join("; ")}${incompleteCorePositions.length > 10 ? "..." : ""}.`);
+  }
+  if (missingCoreEvidencePositions.length) {
+    blockingIssues.push(`Some populated role fields are not backed by field-level evidence: ${missingCoreEvidencePositions.slice(0, 10).map((item) => `${item.title || "Untitled"} missing evidence for ${item.missing.join(", ")}`).join("; ")}${missingCoreEvidencePositions.length > 10 ? "..." : ""}.`);
+  }
+
   return {
     ...tender,
     tender_title: cleanTenderTitle(tender?.tender_title || tender?.name || ""),
     name: cleanTenderTitle(tender?.name || tender?.tender_title || ""),
-    client: cleanTenderRequirementText(tender?.client || ""),
+    client: cleanTenderRequirementText(tender?.client || explicitClientEvidence || ""),
     country: cleanTenderRequirementText(tender?.country || ""),
     tender_number: cleanTenderRequirementText(tender?.tender_number || ""),
     duration: cleanTenderRequirementText(tender?.duration || ""),
@@ -373,7 +535,17 @@ export function normalizeTenderRecord(tender: any) {
     positions: normalizedPositions,
     page_classifications: pageClassifications,
     tender_field_evidence: tenderFieldEvidence,
-    extraction_warnings: Array.from(new Set([...toArray(tender?.extraction_warnings), ...extractionWarnings])),
-    review_required: extractionWarnings.length > 0,
+    extraction_warnings: Array.from(new Set([...retainedWarnings, ...extractionWarnings])),
+    extraction_blocking_issues: blockingIssues,
+    extraction_quality: {
+      raw_position_count: positions.length,
+      merged_position_count: roleCount,
+      duplicate_fragments_merged: Math.max(0, positions.length - roleCount),
+      source_backed_positions: sourceBackedCount,
+      complete_core_positions: completeCoreCount,
+      incomplete_core_positions: incompleteCorePositions.length,
+      missing_core_evidence_positions: missingCoreEvidencePositions.length,
+    },
+    review_required: retainedWarnings.length > 0 || extractionWarnings.length > 0,
   };
 }

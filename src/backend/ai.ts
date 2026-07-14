@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { PDFDocument } from 'pdf-lib';
+import { PDFParse } from 'pdf-parse';
 import { ALL_PRIMARY_POSITIONS } from '../lib/constants.ts';
 import { extractUniversalTenderFacts, mergeSourceEvidence } from '../lib/universalExtraction.ts';
 import { normalizeTenderRecord } from '../lib/tenderPostProcess.ts';
@@ -222,9 +223,9 @@ const tenderSchema: Schema = {
       items: {
         type: Type.OBJECT,
         properties: {
-          position_title: { type: Type.STRING },
+          position_title: { type: Type.STRING, description: "Clean occupational role name only, such as Resident Engineer. Exclude K-1, row numbers, quantities, lot codes, and section labels." },
           quantity: { type: Type.INTEGER },
-          source_position_number: { type: Type.INTEGER },
+          source_position_number: { type: Type.INTEGER, description: "Hidden numeric row/reference code from labels such as K-1 or Position 1; never include this code in position_title." },
           source_document: { type: Type.STRING },
           lot_reference: { type: Type.STRING },
           expert_category: { type: Type.STRING, description: "Key expert, non-key expert, support staff, or other explicit category" },
@@ -268,6 +269,35 @@ const tenderSchema: Schema = {
       }
     }
   }
+};
+
+const tenderTableContextSchema: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    tables: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          table_title: { type: Type.STRING },
+          header_page: { type: Type.INTEGER },
+          first_data_page: { type: Type.INTEGER },
+          last_data_page: { type: Type.INTEGER },
+          columns: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                header: { type: Type.STRING },
+                meaning: { type: Type.STRING },
+              },
+            },
+          },
+          continues_after_chunk: { type: Type.BOOLEAN },
+        },
+      },
+    },
+  },
 };
 
 async function callGenAIWithRetry(
@@ -845,6 +875,17 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
     if (!nextText) return currentText;
     return nextText.length > currentText.length * 1.25 ? nextText : currentText;
   };
+  const strictestText = (current: any, next: any) => {
+    const currentText = cleanTenderLine(current);
+    const nextText = cleanTenderLine(next);
+    if (!currentText) return nextText;
+    if (!nextText) return currentText;
+    const maxYears = (value: string) => Math.max(0, ...(value.match(/\b\d{1,2}\s*years?\b/gi) || []).map((match) => Number(match.match(/\d+/)?.[0] || 0)));
+    const currentYears = maxYears(currentText);
+    const nextYears = maxYears(nextText);
+    if (currentYears !== nextYears && currentYears > 0 && nextYears > 0) return nextYears > currentYears ? nextText : currentText;
+    return bestText(currentText, nextText);
+  };
   const bestArray = (current: any, next: any) =>
     Array.from(new Set([...(Array.isArray(current) ? current : []), ...(Array.isArray(next) ? next : [])].filter(Boolean)));
 
@@ -867,9 +908,9 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
       expert_category: bestText(current.expert_category, position.expert_category),
       work_location: bestText(current.work_location, position.work_location),
       minimum_education: preferCurrentSource ? current.minimum_education || position.minimum_education : bestText(current.minimum_education, position.minimum_education),
-      minimum_years_experience: current.minimum_years_experience || position.minimum_years_experience,
-      general_experience: preferCurrentSource ? current.general_experience || position.general_experience : bestText(current.general_experience, position.general_experience),
-      specific_experience: preferCurrentSource ? current.specific_experience || position.specific_experience : bestText(current.specific_experience, position.specific_experience),
+      minimum_years_experience: Math.max(Number(current.minimum_years_experience || 0), Number(position.minimum_years_experience || 0)) || undefined,
+      general_experience: strictestText(current.general_experience, position.general_experience),
+      specific_experience: strictestText(current.specific_experience, position.specific_experience),
       role_description: preferCurrentSource ? current.role_description || position.role_description || position.description : bestText(current.role_description, position.role_description || position.description),
       required_sector_experience: bestArray(current.required_sector_experience, position.required_sector_experience),
       mandatory_skills: bestArray(current.mandatory_skills, position.mandatory_skills),
@@ -964,6 +1005,17 @@ export function mergeTenderExtractions(items: any[]) {
     if (!nextText) return currentText;
     return nextText.length > currentText.length ? nextText : currentText;
   };
+  const strictestExperienceText = (current: any, next: any) => {
+    const currentText = String(current || "").trim();
+    const nextText = String(next || "").trim();
+    if (!currentText) return nextText;
+    if (!nextText) return currentText;
+    const maxYears = (text: string) => Math.max(0, ...(text.match(/\b\d{1,2}\s*years?\b/gi) || []).map((value) => Number(value.match(/\d+/)?.[0] || 0)));
+    const currentYears = maxYears(currentText);
+    const nextYears = maxYears(nextText);
+    if (currentYears !== nextYears && currentYears > 0 && nextYears > 0) return nextYears > currentYears ? nextText : currentText;
+    return bestText(currentText, nextText);
+  };
   const mergeArray = (current: any, next: any) => {
     const values = [...(Array.isArray(current) ? current : []), ...(Array.isArray(next) ? next : [])].filter(Boolean);
     const seen = new Set<string>();
@@ -978,7 +1030,12 @@ export function mergeTenderExtractions(items: any[]) {
   const pageClassifications = new Map<number, any>();
 
   for (const item of items.filter(Boolean)) {
-    for (const field of scalarFields) merged[field] = bestText(merged[field], item[field]);
+    // Segment results are ordered by source page. Keep the earliest evidenced
+    // tender metadata instead of allowing longer text from later contract pages
+    // to overwrite cover-page and data-sheet facts.
+    for (const field of scalarFields) {
+      if (!String(merged[field] || "").trim() && String(item[field] || "").trim()) merged[field] = item[field];
+    }
     for (const field of arrayFields) merged[field] = mergeArray(merged[field], item[field]);
     for (const classification of Array.isArray(item.page_classifications) ? item.page_classifications : []) {
       const pageNumber = Number(classification.page_number || 0);
@@ -1012,9 +1069,9 @@ export function mergeTenderExtractions(items: any[]) {
         input_months: current.input_months || position.input_months,
         work_location: bestText(current.work_location, position.work_location),
         minimum_education: bestText(current.minimum_education, position.minimum_education),
-        minimum_years_experience: current.minimum_years_experience || position.minimum_years_experience,
-        general_experience: bestText(current.general_experience, position.general_experience),
-        specific_experience: bestText(current.specific_experience, position.specific_experience),
+        minimum_years_experience: Math.max(Number(current.minimum_years_experience || 0), Number(position.minimum_years_experience || 0)) || undefined,
+        general_experience: strictestExperienceText(current.general_experience, position.general_experience),
+        specific_experience: strictestExperienceText(current.specific_experience, position.specific_experience),
         role_description: bestText(current.role_description, position.role_description || position.description),
         required_sector_experience: mergeArray(current.required_sector_experience, position.required_sector_experience),
         mandatory_skills: mergeArray(current.mandatory_skills, position.mandatory_skills),
@@ -1024,7 +1081,7 @@ export function mergeTenderExtractions(items: any[]) {
         required_languages: mergeArray(current.required_languages, position.required_languages),
         position_deliverables: mergeArray(current.position_deliverables, position.position_deliverables),
         required_keywords: mergeArray(current.required_keywords, position.required_keywords),
-        minimum_specific_years: current.minimum_specific_years || position.minimum_specific_years,
+        minimum_specific_years: Math.max(Number(current.minimum_specific_years || 0), Number(position.minimum_specific_years || 0)) || undefined,
         minimum_similar_projects: current.minimum_similar_projects || position.minimum_similar_projects,
         regional_experience: bestText(current.regional_experience, position.regional_experience),
         country_experience: bestText(current.country_experience, position.country_experience),
@@ -1318,15 +1375,27 @@ export async function runParseTenderText(text: string): Promise<any> {
   }
 
   tender = await repairTenderRoleDetails(tender);
+  const finalizedTextExtraction = await finalizeTenderExtraction(
+    [tender],
+    [process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview", "gemini-3.5-flash"],
+  );
+  const finalTender = normalizeTenderRecord(finalizedTextExtraction);
+  if (finalTender.positions.length !== finalizedTextExtraction.positions.length) {
+    throw new Error("Final tender synthesis returned duplicate or invalid personnel positions. The extraction was rejected.");
+  }
+  if (Array.isArray(finalTender.extraction_blocking_issues) && finalTender.extraction_blocking_issues.length > 0) {
+    throw new Error(`Final tender synthesis failed completeness validation: ${finalTender.extraction_blocking_issues.join(" ")}`);
+  }
+  tender = finalTender;
   validation = validateExtractedTender(tender);
-  logExtractionValidation("TENDER", tender.tender_title || tender.name || "Role-detail repaired tender", validation);
+  logExtractionValidation("TENDER", tender.tender_title || tender.name || "Finalized tender", validation);
   tender.extraction_audit = {
     ...(tender.extraction_audit || {}),
-    pipeline: "roles-only + full extraction + role-detail repair + cleanup",
+    pipeline: "roles-only + full extraction + role-detail extraction + mandatory-final-ai-synthesis + validation",
     stage1RolesOnly: true,
     stage2RoleDetailRepair: true,
     stage3Validation: true,
-    stage4FinalCleanup: true,
+    stage4FinalAiSynthesis: true,
     finalPositionCount: Array.isArray(tender.positions) ? tender.positions.length : 0,
     finalValidationIssues: validation.issues,
   };
@@ -1336,15 +1405,17 @@ export async function runParseTenderText(text: string): Promise<any> {
 
 type TenderPdfInput = { path: string; originalname: string; mimetype?: string };
 
-const PRO_RELEVANT_PAGE_CATEGORIES = new Set([
-  "overview", "deadline", "scope", "deliverables", "staff_schedule", "role_requirements", "evaluation", "eligibility",
+const PRO_HIGH_PRIORITY_PAGE_CATEGORIES = new Set([
+  "overview", "deadline", "staff_schedule", "role_requirements", "evaluation", "eligibility",
 ]);
+const PRO_CONTEXT_PAGE_CATEGORIES = new Set(["scope", "deliverables"]);
+const BOILERPLATE_PAGE_CATEGORIES = new Set(["contract_clause", "forms", "financial", "irrelevant", "other"]);
 
 export function selectTenderPagesForPro(
   classifications: any[],
   firstPage: number,
   lastPage: number,
-  options: { confidenceThreshold?: number; contextRadius?: number } = {},
+  options: { confidenceThreshold?: number; contextRadius?: number; tableContexts?: TenderTableContext[] } = {},
 ) {
   const confidenceThreshold = options.confidenceThreshold ?? 0.85;
   const contextRadius = options.contextRadius ?? 2;
@@ -1370,13 +1441,25 @@ export function selectTenderPagesForPro(
     const categories = (Array.isArray(classification.categories) ? classification.categories : [])
       .map((category: any) => String(category || "").trim().toLowerCase());
     const summary = String(classification.summary || "");
+    const isBoilerplate = categories.some((category: string) => BOILERPLATE_PAGE_CATEGORIES.has(category));
+    const isHighPriority = categories.some((category: string) => PRO_HIGH_PRIORITY_PAGE_CATEGORIES.has(category));
+    const isContextPage = categories.some((category: string) => PRO_CONTEXT_PAGE_CATEGORIES.has(category));
     if (page <= 8) addAnchor(page, "opening-context");
     if (classification.has_staff_requirements) addAnchor(page, "staff-requirements");
-    if (categories.some((category: string) => PRO_RELEVANT_PAGE_CATEGORIES.has(category))) addAnchor(page, "relevant-category");
+    if (isHighPriority || (isContextPage && !isBoilerplate)) addAnchor(page, "relevant-category");
     if (classification.readability !== "CLEAR") addAnchor(page, "ocr-or-layout-review");
     if (Number(classification.confidence || 0) < confidenceThreshold) addAnchor(page, "low-confidence");
-    if (/\b(?:key experts?|personnel|staff schedule|terms of reference|scope of services|deliverables?|deadline|submission date|evaluation criteria|qualification|experience requirements?)\b/i.test(summary)) {
+    if ((!isBoilerplate || isHighPriority) && /\b(?:key experts?|personnel|staff schedule|terms of reference|scope of services|deliverables?|deadline|submission date|evaluation criteria|qualification|experience requirements?)\b/i.test(summary)) {
       addAnchor(page, "summary-signal");
+    }
+  }
+
+  for (const tableContext of Array.isArray(options.tableContexts) ? options.tableContexts : []) {
+    const tableFirstPage = Math.max(firstPage, Number(tableContext.first_data_page || 0));
+    const tableLastPage = Math.min(lastPage, Number(tableContext.last_data_page || 0));
+    if (!Number.isInteger(tableFirstPage) || !Number.isInteger(tableLastPage) || tableLastPage < tableFirstPage) continue;
+    for (let page = tableFirstPage; page <= tableLastPage; page++) {
+      addAnchor(page, "continued-personnel-table");
     }
   }
 
@@ -1394,12 +1477,377 @@ export function selectTenderPagesForPro(
   return { selectedPages, skippedPages, anchors: Array.from(anchors).sort((a, b) => a - b), reasons };
 }
 
+function searchableTenderText(value: any) {
+  return String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+export function reconcileTenderEvidencePages(tender: any, pageTexts: Array<{ page_number: number; text: string }>) {
+  if (!pageTexts.length) return tender;
+  const searchablePages = pageTexts.map((page) => ({ ...page, searchable: searchableTenderText(page.text) }));
+  const findPages = (value: any) => {
+    const searchable = searchableTenderText(value);
+    if (searchable.length < 12) return [];
+    const probes = [searchable, searchable.slice(0, 180), searchable.slice(0, 100)].filter((probe, index, values) => probe.length >= 12 && values.indexOf(probe) === index);
+    const probe = probes.find((candidate) => searchablePages.some((page) => page.searchable.includes(candidate)));
+    return probe ? searchablePages.filter((page) => page.searchable.includes(probe)).map((page) => page.page_number) : [];
+  };
+  const reconcileEvidence = (items: any[]) => (Array.isArray(items) ? items : []).map((item: any) => {
+    const pages = findPages(item?.quote);
+    return pages.length ? { ...item, page_number: pages[0] } : item;
+  });
+
+  return {
+    ...tender,
+    tender_field_evidence: reconcileEvidence(tender?.tender_field_evidence),
+    positions: (Array.isArray(tender?.positions) ? tender.positions : []).map((position: any) => {
+      const titleWithoutCode = String(position?.position_title || position?.title || position?.role || "").replace(/^\s*K\s*[-.]?\s*\d+\s*[:.)-]?\s*/i, "");
+      const matchedPages = new Set<number>();
+      [titleWithoutCode, ...(Array.isArray(position?.source_quotes) ? position.source_quotes : [])].forEach((value) => {
+        findPages(value).forEach((page) => matchedPages.add(page));
+      });
+      const fieldEvidence = reconcileEvidence(position?.field_evidence);
+      fieldEvidence.forEach((item: any) => {
+        if (Number.isInteger(Number(item?.page_number)) && Number(item.page_number) > 0) matchedPages.add(Number(item.page_number));
+      });
+      return {
+        ...position,
+        source_page_numbers: matchedPages.size
+          ? Array.from(matchedPages).sort((a, b) => a - b)
+          : position.source_page_numbers,
+        field_evidence: fieldEvidence,
+      };
+    }),
+  };
+}
+
+export function validateTenderFieldSemantics(tender: any) {
+  const issues: string[] = [];
+  const text = (value: any) => String(value || "").trim();
+  const lowered = (value: any) => text(value).toLowerCase();
+  const significantTokens = (value: any) => lowered(value)
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .filter((token) => token.length >= 4 && !/^(?:shall|with|from|that|this|will|have|must|required|minimum|experience|years?)$/.test(token));
+  const fieldEvidence = (position: any, field: string) => (Array.isArray(position?.field_evidence) ? position.field_evidence : [])
+    .filter((item: any) => lowered(item?.field) === field.toLowerCase() && text(item?.quote));
+  const hasFieldEvidence = (position: any, field: string, value: any) => {
+    const rawValue = text(value);
+    if (!rawValue) return true;
+    const evidences = fieldEvidence(position, field);
+    if (!evidences.length) return false;
+    if (typeof value === "number" || /^\d+(?:\.\d+)?$/.test(rawValue)) {
+      const escapedValue = rawValue.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return evidences.some((item: any) => new RegExp(`\\b${escapedValue}\\b`).test(String(item.quote || "")));
+    }
+    const tokens = significantTokens(rawValue);
+    if (!tokens.length) return true;
+    return evidences.some((item: any) => {
+      const quoteTokens = new Set(significantTokens(item?.quote));
+      const hits = tokens.filter((token) => quoteTokens.has(token)).length;
+      return hits >= Math.min(3, tokens.length) || hits / tokens.length >= 0.35;
+    });
+  };
+  const populatedEvidenceFields = [
+    "position_title",
+    "quantity",
+    "minimum_education",
+    "minimum_years_experience",
+    "minimum_specific_years",
+    "general_experience",
+    "specific_experience",
+    "role_description",
+    "input_months",
+    "work_location",
+    "nationality_preference",
+  ];
+
+  (Array.isArray(tender?.positions) ? tender.positions : []).forEach((position: any, index: number) => {
+    const title = String(position?.position_title || "").trim();
+    const label = `Position ${index + 1}${title ? ` (${title})` : ""}`;
+    if (!title) issues.push(`${label}: position_title is empty.`);
+    if (/^\s*(?:K\s*[-.]?\s*\d+|\d+\s*[.):/-]|position\s*(?:no\.?|number)?\s*\d+)\b/i.test(title)) {
+      issues.push(`${label}: position_title contains a row/reference code instead of only the occupational role.`);
+    }
+    if (/\b(?:qty|quantity|\d+\s*(?:nos?\.?|persons?|staff))\b/i.test(title)) {
+      issues.push(`${label}: position_title contains quantity information.`);
+    }
+    if (/\b(?:minimum\s+(?:degree|qualification|experience)|years?\s+of\s+experience|shall\s+have|responsibilities?\s+include)\b/i.test(title)) {
+      issues.push(`${label}: position_title contains requirement text that belongs in another field.`);
+    }
+    if (title.length > 100) issues.push(`${label}: position_title is too long to be a clean occupational role.`);
+    if (/\b(?:documents?|proposal|consultant|contract|terms?|conditions?|eligibility|qualification of|obligations?|assumptions?|risks?|institution|authority|declaration|submission|appendix|section)\b/i.test(title)) {
+      issues.push(`${label}: position_title looks like a tender clause or heading, not a personnel role.`);
+    }
+
+    const quantity = position?.quantity;
+    if (quantity !== undefined && quantity !== null && quantity !== "") {
+      const numericQuantity = Number(quantity);
+      if (!Number.isInteger(numericQuantity) || numericQuantity <= 0 || numericQuantity > 500) {
+        issues.push(`${label}: quantity must be a positive whole-number staff count.`);
+      }
+    }
+    const inputMonths = position?.input_months;
+    if (inputMonths !== undefined && inputMonths !== null && inputMonths !== "") {
+      const numericInputMonths = Number(inputMonths);
+      if (!Number.isFinite(numericInputMonths) || numericInputMonths <= 0 || numericInputMonths > 1000) {
+        issues.push(`${label}: input_months must be a positive staff-effort value, not a role count or experience year.`);
+      }
+    }
+    ["minimum_years_experience", "minimum_specific_years"].forEach((field) => {
+      const value = position?.[field];
+      if (value !== undefined && value !== null && value !== "") {
+        const numericValue = Number(value);
+        if (!Number.isInteger(numericValue) || numericValue < 0 || numericValue > 80) {
+          issues.push(`${label}: ${field} must be a realistic whole-number year requirement.`);
+        }
+      }
+    });
+
+    const education = String(position?.minimum_education || "").trim();
+    if (education && !/\b(?:degree|diploma|bachelor|master|bsc|msc|phd|qualification|engineer|surveying|economics|science|university|college|registered|chartered|licen[cs]e|membership)\b/i.test(education)) {
+      issues.push(`${label}: minimum_education does not read like an education or professional qualification requirement.`);
+    }
+    if (education && /\b(?:responsibilit|duties|tasks|manage|supervis|prepare|review|months?|personnel|no\.|nos\.|quantity|input)\b/i.test(education)) {
+      issues.push(`${label}: minimum_education contains duties, quantity, or input-month text that belongs in another field.`);
+    }
+
+    const generalExperience = text(position?.general_experience);
+    if (generalExperience && !/\b(?:experience|years?|professional|postgraduate|sector|construction|supervision|design|projects?)\b/i.test(generalExperience)) {
+      issues.push(`${label}: general_experience does not read like an experience requirement.`);
+    }
+    if (generalExperience && /\b(?:responsibilit|duties|tasks|shall be responsible|prepare|review|supervise|coordinate|manage|administer)\b/i.test(generalExperience) && !/\b(?:experience|years?)\b/i.test(generalExperience)) {
+      issues.push(`${label}: general_experience appears to contain duties instead of broad experience requirements.`);
+    }
+
+    const specificExperience = text(position?.specific_experience);
+    if (specificExperience && !/\b(?:experience|years?|similar|specific|project|sector|road|bridge|construction|supervision|design|assignment|contract|country|region|urban|rural)\b/i.test(specificExperience)) {
+      issues.push(`${label}: specific_experience does not read like role-, project-, or sector-specific experience.`);
+    }
+
+    const roleDescription = String(position?.role_description || "").trim();
+    if (roleDescription && roleDescription.toLowerCase() === title.toLowerCase()) {
+      issues.push(`${label}: role_description repeats the title instead of containing duties.`);
+    }
+    if (roleDescription && /\b(?:degree|diploma|bachelor|master|bsc|msc|phd|minimum\s+\d+\s+years?|qualification|registered|chartered)\b/i.test(roleDescription) && !/\b(?:responsibilit|duties|tasks|prepare|review|supervis|manage|coordinate|administer|inspect|ensure|monitor|evaluate|report)\b/i.test(roleDescription)) {
+      issues.push(`${label}: role_description appears to contain qualifications or years instead of duties.`);
+    }
+    if (roleDescription && !/\b(?:responsibilit|duties|tasks|prepare|review|supervis|manage|coordinate|administer|inspect|ensure|monitor|evaluate|report|design|conduct|assist|advise|implement|control|verify)\b/i.test(roleDescription)) {
+      issues.push(`${label}: role_description does not contain clear duty or activity wording.`);
+    }
+
+    const workLocation = text(position?.work_location);
+    if (workLocation && /\b(?:degree|diploma|experience|years?|responsibilit|duties|tasks|quantity|months?)\b/i.test(workLocation)) {
+      issues.push(`${label}: work_location contains non-location requirement text.`);
+    }
+    const nationality = text(position?.nationality_preference);
+    if (nationality && /^(?:any|n\/a|na|none|not applicable)$/i.test(nationality)) {
+      issues.push(`${label}: nationality_preference must stay empty unless the tender explicitly states a nationality requirement.`);
+    }
+    if (nationality && /\b(?:degree|diploma|experience|years?|responsibilit|duties|tasks|months?)\b/i.test(nationality)) {
+      issues.push(`${label}: nationality_preference contains non-nationality text.`);
+    }
+
+    for (const field of populatedEvidenceFields) {
+      const value = position?.[field];
+      if (value !== undefined && value !== null && String(value).trim() && !hasFieldEvidence(position, field, value)) {
+        issues.push(`${label}: ${field} is populated without matching field_evidence from the tender source.`);
+      }
+    }
+  });
+  return issues;
+}
+
+type TenderTableContext = {
+  table_title: string;
+  header_page: number;
+  first_data_page: number;
+  last_data_page: number;
+  columns: Array<{ header: string; meaning: string }>;
+  continues_after_chunk: boolean;
+};
+
+function cleanTenderTableContext(value: any): TenderTableContext | null {
+  const columns = (Array.isArray(value?.columns) ? value.columns : [])
+    .map((column: any) => ({
+      header: String(column?.header || "").trim(),
+      meaning: String(column?.meaning || "").trim(),
+    }))
+    .filter((column: any) => column.header && column.meaning);
+  const headerPage = Number(value?.header_page || 0);
+  const firstDataPage = Number(value?.first_data_page || headerPage || 0);
+  const lastDataPage = Number(value?.last_data_page || firstDataPage || 0);
+  if (!columns.length || !Number.isInteger(firstDataPage) || firstDataPage <= 0 || !Number.isInteger(lastDataPage) || lastDataPage < firstDataPage) return null;
+  return {
+    table_title: String(value?.table_title || "Untitled continued table").trim(),
+    header_page: Number.isInteger(headerPage) && headerPage > 0 ? headerPage : firstDataPage,
+    first_data_page: firstDataPage,
+    last_data_page: lastDataPage,
+    columns,
+    continues_after_chunk: Boolean(value?.continues_after_chunk),
+  };
+}
+
+export function getTenderTableContextsForRange(contexts: TenderTableContext[], firstPage: number, lastPage: number) {
+  return (Array.isArray(contexts) ? contexts : []).filter((context) =>
+    context.first_data_page <= lastPage && context.last_data_page >= firstPage,
+  );
+}
+
+async function extractTenderTableContexts(
+  pageTexts: Array<{ page_number: number; text: string }>,
+  models: string[],
+) {
+  const usablePages = pageTexts.filter((page) => String(page.text || "").trim());
+  if (!usablePages.length) return [];
+  const chunkSize = Math.max(20, Math.min(120, Number(process.env.TENDER_TABLE_CONTEXT_PAGES || 80)));
+  const contexts: TenderTableContext[] = [];
+  let activeTables: TenderTableContext[] = [];
+
+  for (let start = 0; start < usablePages.length; start += chunkSize) {
+    const chunk = usablePages.slice(start, start + chunkSize);
+    const pageText = chunk.map((page) => {
+      const text = String(page.text || "").trim();
+      const bounded = text.length > 6000 ? `${text.slice(0, 5000)}\n[PAGE MIDDLE OMITTED]\n${text.slice(-1000)}` : text;
+      return `--- PHYSICAL PDF PAGE ${page.page_number} ---\n${bounded}`;
+    }).join("\n\n");
+    const prompt = `You are the persistent table-structure stage of a tender extraction pipeline.
+Identify personnel, staffing, qualification, evaluation, deliverable, and requirement tables in these consecutive physical PDF pages.
+
+CRITICAL CONTINUATION RULE:
+A table header may appear only on its first page. Rows on later pages still inherit exactly the same columns until the table ends or a new table/header replaces it. Use the ACTIVE TABLES FROM THE PREVIOUS CHUNK to interpret headerless continuation rows. Do not treat the first headerless row as a new header.
+
+For every relevant table, return:
+- table_title
+- physical page containing the header
+- first and last physical data page observed for that table
+- every column header and its semantic meaning, such as row reference, position title, quantity, education, general experience, specific experience, duties, input months, location, nationality, or evaluation points
+- continues_after_chunk=true only when the table is still active at the end of the supplied pages
+
+ACTIVE TABLES FROM PREVIOUS CHUNK:
+${JSON.stringify(activeTables)}
+
+PAGES:
+${pageText}`;
+    const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({
+      model: modelName,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: { responseMimeType: "application/json", responseSchema: tenderTableContextSchema, temperature: 0 },
+    }), models);
+    const parsed = parseGenAIJSON(response.text || "{}");
+    const chunkContexts = (Array.isArray(parsed?.tables) ? parsed.tables : [])
+      .map(cleanTenderTableContext)
+      .filter((context: TenderTableContext | null): context is TenderTableContext => Boolean(context));
+    contexts.push(...chunkContexts);
+    activeTables = chunkContexts.filter((context) => context.continues_after_chunk);
+  }
+
+  const merged = new Map<string, TenderTableContext>();
+  contexts.forEach((context) => {
+    const columnKey = context.columns.map((column) => `${column.header}:${column.meaning}`).join("|").toLowerCase().replace(/\s+/g, " ");
+    const key = `${context.table_title.toLowerCase().replace(/\s+/g, " ")}|${columnKey}`;
+    const current = merged.get(key);
+    merged.set(key, current ? {
+      ...current,
+      header_page: Math.min(current.header_page, context.header_page),
+      first_data_page: Math.min(current.first_data_page, context.first_data_page),
+      last_data_page: Math.max(current.last_data_page, context.last_data_page),
+      continues_after_chunk: context.continues_after_chunk,
+    } : context);
+  });
+  return Array.from(merged.values());
+}
+
+async function finalizeTenderExtraction(items: any[], models: string[]) {
+  const candidate = mergeTenderExtractions(items);
+  const positionFragments = items.flatMap((item) => Array.isArray(item?.positions) ? item.positions : []);
+  const tenderCandidate = Object.fromEntries(Object.entries(candidate).filter(([key]) => ![
+    "positions", "page_classifications", "extraction_warnings", "extraction_audit", "extraction_quality", "extraction_blocking_issues",
+  ].includes(key)));
+  const payload = JSON.stringify({ tender_candidate: tenderCandidate, position_fragments: positionFragments });
+  const maxPayloadChars = Math.max(100000, Number(process.env.TENDER_FINAL_SYNTHESIS_MAX_CHARS || 750000));
+  if (payload.length > maxPayloadChars) {
+    throw new Error(`Final tender synthesis input is ${payload.length.toLocaleString()} characters, above the configured safe limit of ${maxPayloadChars.toLocaleString()}. Increase TENDER_FINAL_SYNTHESIS_MAX_CHARS or reduce duplicate source documents.`);
+  }
+
+  const prompt = `You are the FINAL authoritative extraction stage for an international tender.
+The JSON below contains tender-level candidates and position fragments extracted independently from document segments. These are candidate observations, not the final record.
+
+Produce the complete final tender object now. The result will be shown directly to the user and stored without any later factual repair.
+
+MANDATORY FINALIZATION RULES:
+1. Return exactly one position record per real required role within the same lot/package. Merge numbered, prefixed, reordered, abbreviated, and detailed-title variants when they describe the same person. Keep genuinely separate lots or packages separate.
+2. Combine each role's title, quantity, education, general experience, specific experience, duties, location, input months, skills, certifications, languages, and evaluation details from every matching fragment.
+3. When the source states different minimum years for the same role, retain the stricter explicit requirement and preserve evidence for it. Never weaken a requirement.
+4. Do not invent, infer from general industry practice, or transfer a requirement from one role to another. A fact must be supported by the supplied fragment evidence.
+5. Reject headings, consultant/company obligations, forms, clauses, institutions, and sentence fragments. They are not personnel roles.
+6. Tender title, client, number, deadline, scope, and duration must describe the procurement itself, not a later contract subsection or example project.
+7. Keep source pages, quotes, and field evidence internally in the JSON for validation, but do not turn them into business requirements.
+8. If a field is not stated, leave it empty. Do not output commentary or reasoning inside any field.
+9. Perform a silent completeness check before responding. Return only schema-valid JSON.
+
+SEMANTIC FIELD CONTRACT:
+- position_title = occupational/job role only. Example: "K-1: Resident Engineer (1 No.)" becomes position_title "Resident Engineer", source_position_number 1, quantity 1.
+- source_position_number = hidden row/reference number such as the 1 in K-1. Never repeat K-1 in position_title.
+- quantity = number of people required, never part of position_title.
+- minimum_education = degree, diploma, academic discipline, registration, licence, or professional qualification requirements only.
+- minimum_years_experience = overall minimum years as a number.
+- general_experience = broad professional or sector experience requirements.
+- specific_experience = role-, project-, country-, assignment-, or task-specific experience requirements.
+- role_description = duties, responsibilities, functions, tasks, and expected activities, not qualifications or years.
+- input_months = staff effort/man-months, not quantity or experience.
+- work_location, nationality_preference, residency_requirement, lot_reference, evaluation_points, languages, certifications, memberships, software, skills, and deliverables must each contain only the meaning represented by their field name.
+- Understand the meaning of table columns and surrounding headings before assigning any value. Do not copy an entire row into one field.
+
+CANDIDATE EXTRACTION JSON:
+${payload}`;
+  const generateFinal = async (promptText: string) => {
+    const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({
+      model: modelName,
+      contents: [{ role: "user", parts: [{ text: promptText }] }],
+      config: { responseMimeType: "application/json", responseSchema: tenderSchema, temperature: 0 },
+    }), models);
+    return sanitizeExtractedValues(parseGenAIJSON(response.text || "{}"));
+  };
+  let finalized = await generateFinal(prompt);
+  if (!Array.isArray(finalized?.positions) || finalized.positions.length === 0) {
+    throw new Error("Final tender synthesis did not return any valid personnel positions.");
+  }
+  let semanticIssues = validateTenderFieldSemantics(finalized);
+  if (semanticIssues.length > 0) {
+    finalized = await generateFinal(`${prompt}
+
+SEMANTIC VALIDATION RETRY:
+Your previous final result failed these field-meaning checks:
+${semanticIssues.map((issue) => `- ${issue}`).join("\n")}
+
+Previous result:
+${JSON.stringify(finalized)}
+
+Rebuild the final tender object from the candidate extraction. Correct every field-placement problem. In particular, position_title must contain only the clean occupational role and never K-1, numbering, quantity, qualification, experience, or duties. Return only the corrected schema-valid JSON.`);
+    semanticIssues = validateTenderFieldSemantics(finalized);
+  }
+  if (!Array.isArray(finalized?.positions) || finalized.positions.length === 0 || semanticIssues.length > 0) {
+    throw new Error(`Final tender synthesis failed semantic field validation: ${semanticIssues.join(" ") || "No personnel positions returned."}`);
+  }
+
+  return {
+    ...candidate,
+    ...finalized,
+    positions: finalized.positions,
+    page_classifications: candidate.page_classifications,
+    tender_field_evidence: Array.isArray(finalized.tender_field_evidence) && finalized.tender_field_evidence.length
+      ? finalized.tender_field_evidence
+      : candidate.tender_field_evidence,
+  };
+}
+
 export async function runParseTenderPdfFiles(files: TenderPdfInput[]): Promise<any> {
   if (!files.length) throw new Error("At least one tender PDF is required.");
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "via-tender-"));
   const segmentSize = Math.max(10, Math.min(100, Number(process.env.TENDER_PDF_SEGMENT_PAGES || 25)));
   const maxPages = Math.max(1, Number(process.env.TENDER_MAX_PAGES || 2000));
   const segments: Array<{ path: string; fileName: string; firstPage: number; lastPage: number }> = [];
+  const sourcePageTexts: Array<{ page_number: number; text: string }> = [];
   let totalPages = 0;
 
   try {
@@ -1412,6 +1860,18 @@ export async function runParseTenderPdfFiles(files: TenderPdfInput[]): Promise<a
       }
       const documentPageOffset = totalPages;
       totalPages += filePages;
+      let parser: PDFParse | undefined;
+      try {
+        parser = new PDFParse({ data: sourceBytes });
+        const textResult = await parser.getText();
+        textResult.pages.forEach((page, pageIndex) => {
+          sourcePageTexts.push({ page_number: documentPageOffset + pageIndex + 1, text: page.text || "" });
+        });
+      } catch (error) {
+        console.warn(`[Tender extraction] Native text-layer page indexing failed for ${file.originalname}:`, error);
+      } finally {
+        await parser?.destroy().catch(() => undefined);
+      }
 
       const segmentStep = Math.max(1, segmentSize - 2);
       for (let start = 0; start < filePages; start += segmentStep) {
@@ -1432,6 +1892,7 @@ export async function runParseTenderPdfFiles(files: TenderPdfInput[]): Promise<a
 
     const modelNames = [process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview", "gemini-3.5-flash"];
     const classificationModels = [process.env.TENDER_CLASSIFICATION_MODEL || "gemini-3.5-flash", modelNames[0]];
+    const tableContexts = await extractTenderTableContexts(sourcePageTexts, classificationModels);
     const results = await mapWithConcurrency(
       segments,
       Number(process.env.TENDER_EXTRACTION_CONCURRENCY || 2),
@@ -1457,7 +1918,10 @@ export async function runParseTenderPdfFiles(files: TenderPdfInput[]): Promise<a
         );
 
         try {
-          const segmentContext = `This is segment ${index + 1} of ${segments.length}, covering GLOBAL tender pages ${segment.firstPage}-${segment.lastPage} from ${segment.fileName}. Local PDF page 1 is global page ${segment.firstPage}. Every returned page number must use global numbering.`;
+          const inheritedTableContexts = getTenderTableContextsForRange(tableContexts, segment.firstPage, segment.lastPage);
+          const segmentContext = `This is segment ${index + 1} of ${segments.length}, covering GLOBAL tender pages ${segment.firstPage}-${segment.lastPage} from ${segment.fileName}. Local PDF page 1 is global page ${segment.firstPage}. Every returned page number must use global numbering.
+PERSISTENT TABLE CONTEXT: ${inheritedTableContexts.length ? JSON.stringify(inheritedTableContexts) : "No inherited table header was identified for this page range."}
+When a visible page contains table rows without a repeated header, apply the inherited column meanings above. Continue mapping each cell to the same semantic field until the table ends. Never reinterpret a continuation row as a new header.`;
           const callPdfPass = async (
             file: { uri?: string; mimeType?: string },
             prompt: string,
@@ -1500,6 +1964,7 @@ Capture education, general and specific experience, duties, sector experience, s
             {
               confidenceThreshold: Number(process.env.TENDER_RELEVANCE_CONFIDENCE || 0.85),
               contextRadius: Number(process.env.TENDER_RELEVANCE_CONTEXT_PAGES || 2),
+              tableContexts: inheritedTableContexts,
             },
           );
 
@@ -1586,7 +2051,14 @@ Re-read the PDF visually. Return every missing page classification and complete 
       (item.extraction_routing?.pro_pages || []).forEach((page: any) => proPageSet.add(Number(page)));
       (item.page_classifications || []).forEach((classification: any) => classifierPageSet.add(Number(classification.page_number)));
     });
-    const tender = normalizeTenderRecord(mergeTenderExtractions(extracted));
+    const finalizedExtraction = await finalizeTenderExtraction(extracted, modelNames);
+    const tender = normalizeTenderRecord(reconcileTenderEvidencePages(finalizedExtraction, sourcePageTexts));
+    if (tender.positions.length !== finalizedExtraction.positions.length) {
+      throw new Error(`Final tender synthesis returned ${finalizedExtraction.positions.length} position records, but validation found only ${tender.positions.length} distinct valid roles. The extraction was rejected instead of silently correcting duplicate or invalid positions.`);
+    }
+    if (Array.isArray(tender.extraction_blocking_issues) && tender.extraction_blocking_issues.length > 0) {
+      throw new Error(`Final tender synthesis failed completeness validation: ${tender.extraction_blocking_issues.join(" ")}`);
+    }
     const classifiedPageNumbers = new Set((tender.page_classifications || []).map((item: any) => Number(item.page_number)));
     const missingPageClassifications = Array.from({ length: totalPages }, (_, index) => index + 1).filter((page) => !classifiedPageNumbers.has(page));
     const lowReadabilityPages = (tender.page_classifications || [])
@@ -1600,7 +2072,7 @@ Re-read the PDF visually. Return every missing page classification and complete 
     tender.review_required = tender.extraction_warnings.length > 0;
     const validation = validateExtractedTender(tender);
     tender.extraction_audit = {
-      pipeline: "native-pdf-vision + exhaustive-page-classification + independent-role-register + full-extraction + ultra-resolution-repair + per-field-evidence",
+      pipeline: "native-pdf-vision + page-classification + segment-extraction + maximum-resolution-repair + mandatory-final-ai-synthesis + internal-evidence-validation",
       model: modelNames[0],
       totalPages,
       segmentSize,
@@ -1610,6 +2082,7 @@ Re-read the PDF visually. Return every missing page classification and complete 
       classifiedPageCount: classifiedPageNumbers.size,
       missingPageClassifications,
       lowReadabilityPages,
+      tableContextsDetected: tableContexts.length,
       pageRouting: {
         classifierModel: classificationModels[0],
         extractionModel: modelNames[0],
