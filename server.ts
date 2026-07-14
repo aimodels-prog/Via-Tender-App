@@ -8,6 +8,7 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import jwt from "jsonwebtoken";
 import multer from "multer";
+import fs from "node:fs/promises";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { google } from "googleapis";
@@ -311,7 +312,10 @@ async function startServer() {
 
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
-  const upload = multer({ dest: "uploads/" });
+  const upload = multer({
+    dest: "uploads/",
+    limits: { fileSize: Number(process.env.TENDER_MAX_FILE_BYTES || 250 * 1024 * 1024), files: 20 },
+  });
 
   app.set("trust proxy", 1);
   app.use(helmet({ contentSecurityPolicy: false }));
@@ -1154,6 +1158,61 @@ async function startServer() {
       await writeLog("Tender Parse Failed", `Tender extraction job ${jobId} failed: ${error?.message || error}`, "ERROR");
     }
   }
+
+  async function runTenderPdfParseJob(jobId: string, files: Express.Multer.File[]) {
+    try {
+      await query(`update parse_jobs set status = 'processing', progress = 10, updated_at = now() where id = $1`, [jobId]);
+      const { runParseTenderPdfFiles } = await import("./src/backend/ai.ts");
+      const tender = await runParseTenderPdfFiles(files.map((file) => ({
+        path: file.path,
+        originalname: file.originalname,
+        mimetype: file.mimetype,
+      })));
+      tender.extraction_audit = {
+        ...(tender.extraction_audit || {}),
+        originalFiles: files.map((file) => file.originalname),
+        asyncJobId: jobId,
+      };
+      await query(
+        `update parse_jobs set status = 'completed', progress = 100, result = $2::jsonb, updated_at = now(), completed_at = now() where id = $1`,
+        [jobId, JSON.stringify({ tender })],
+      );
+      await writeLog("Tender Parsed", `Native PDF tender extraction job ${jobId} completed`);
+    } catch (error: any) {
+      console.error("Native PDF tender parse job failed:", error);
+      await Promise.all(files.map((file) => fs.unlink(file.path).catch(() => undefined)));
+      await query(
+        `update parse_jobs set status = 'failed', progress = 100, error_message = $2, updated_at = now(), completed_at = now() where id = $1`,
+        [jobId, error?.message || "Native PDF tender parsing failed"],
+      );
+      await writeLog("Tender Parse Failed", `Native PDF extraction job ${jobId} failed: ${error?.message || error}`, "ERROR");
+    }
+  }
+
+  app.post("/api/parse-tender-files", ...aiRoute, upload.array("files", 20), async (req, res) => {
+    const files = (req.files as Express.Multer.File[]) || [];
+    try {
+      if (!files.length) return res.status(400).json({ error: "At least one tender PDF is required." });
+      if (files.some((file) => file.mimetype !== "application/pdf" && !file.originalname.toLowerCase().endsWith(".pdf"))) {
+        await Promise.all(files.map((file) => fs.unlink(file.path).catch(() => undefined)));
+        return res.status(400).json({ error: "Native tender extraction currently accepts PDF files only." });
+      }
+      const jobId = `parse_tender_${uuidv4()}`;
+      await query(
+        `insert into parse_jobs (id, user_id, type, status, progress, input) values ($1, $2, 'tender', 'queued', 0, $3::jsonb)`,
+        [jobId, req.user?.id || null, JSON.stringify({
+          extractionMode: "native-pdf-vision",
+          files: files.map((file) => ({ name: file.originalname, size: file.size })),
+          startedAt: new Date().toISOString(),
+        })],
+      );
+      void runTenderPdfParseJob(jobId, files);
+      res.status(202).json({ jobId, status: "queued", progress: 0 });
+    } catch (error: any) {
+      await Promise.all(files.map((file) => fs.unlink(file.path).catch(() => undefined)));
+      res.status(500).json({ error: error.message });
+    }
+  });
 
   app.post("/api/parse-tender", ...aiRoute, async (req, res) => {
     try {

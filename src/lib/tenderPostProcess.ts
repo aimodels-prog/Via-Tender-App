@@ -123,7 +123,7 @@ export function cleanTenderRequirementText(value: any) {
     deduped.push(sentence);
   });
 
-  return deduped.join(" ").slice(0, 1800).trim();
+  return deduped.join(" ").trim();
 }
 
 function cleanTenderEducationRequirement(value: any) {
@@ -180,14 +180,30 @@ export function normalizeTenderPosition(position: any, index = 0) {
   );
   const id = position?.id || (title ? `pos_${title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")}` : `pos_${index}`);
 
+  const rawQuantity = Number(position?.quantity ?? position?.qty);
+  const rawMinimumYears = Number(position?.minimum_years_experience ?? position?.min_years_experience);
+  const sourcePageNumbers = Array.from(
+    new Set(
+      (Array.isArray(position?.source_page_numbers) ? position.source_page_numbers : [])
+        .map((page: any) => Number(page))
+        .filter((page: number) => Number.isInteger(page) && page > 0),
+    ),
+  );
+
   return {
     ...position,
     id,
     position_title: title || `Position ${index + 1}`,
-    quantity: Number(position?.quantity || position?.qty || 1) || 1,
+    quantity: Number.isFinite(rawQuantity) && rawQuantity > 0 ? rawQuantity : undefined,
+    source_position_number: Number.isInteger(Number(position?.source_position_number)) && Number(position.source_position_number) > 0 ? Number(position.source_position_number) : undefined,
+    source_document: cleanTenderRequirementText(position?.source_document || ""),
+    lot_reference: cleanTenderRequirementText(position?.lot_reference || ""),
+    expert_category: cleanTenderRequirementText(position?.expert_category || ""),
+    input_months: Number.isFinite(Number(position?.input_months)) && Number(position.input_months) >= 0 ? Number(position.input_months) : undefined,
+    work_location: cleanTenderRequirementText(position?.work_location || ""),
     minimum_education: cleanTenderEducationRequirement(position?.minimum_education || position?.education || ""),
     minimum_years_experience:
-      Number(position?.minimum_years_experience || position?.min_years_experience || 0) || undefined,
+      Number.isFinite(rawMinimumYears) && rawMinimumYears >= 0 ? rawMinimumYears : undefined,
     general_experience: cleanTenderRequirementText(position?.general_experience || ""),
     specific_experience: cleanTenderSpecificExperience(position?.specific_experience || ""),
     role_description: cleanTenderRoleDescription(
@@ -195,18 +211,44 @@ export function normalizeTenderPosition(position: any, index = 0) {
     ),
     required_sector_experience: toArray(position?.required_sector_experience),
     mandatory_skills: toArray(position?.mandatory_skills),
+    required_software: toArray(position?.required_software),
+    required_certifications: toArray(position?.required_certifications),
+    professional_memberships: toArray(position?.professional_memberships),
+    required_languages: toArray(position?.required_languages),
+    position_deliverables: toArray(position?.position_deliverables),
     required_keywords: Array.from(new Set(toArray(position?.required_keywords))),
     met_team_constraints: toArray(position?.met_team_constraints),
     nationality_preference: cleanTenderRequirementText(position?.nationality_preference || ""),
+    residency_requirement: cleanTenderRequirementText(position?.residency_requirement || ""),
+    regional_experience: cleanTenderRequirementText(position?.regional_experience || ""),
+    country_experience: cleanTenderRequirementText(position?.country_experience || ""),
+    source_page_numbers: sourcePageNumbers,
+    source_quotes: toArray(position?.source_quotes),
+    field_evidence: (Array.isArray(position?.field_evidence) ? position.field_evidence : [])
+      .map((evidence: any) => ({
+        field: cleanTenderRequirementText(evidence?.field || ""),
+        page_number: Number(evidence?.page_number || 0),
+        quote: cleanTenderRequirementText(evidence?.quote || ""),
+      }))
+      .filter((evidence: any) => evidence.field && Number.isInteger(evidence.page_number) && evidence.page_number > 0 && evidence.quote),
+    extraction_warnings: toArray(position?.extraction_warnings),
   };
 }
 
-function isInvalidTenderPositionTitle(value: string) {
+export function isInvalidTenderPositionTitle(value: string) {
   const title = cleanText(value);
   if (!title) return true;
+  const wordCount = title.split(/\s+/).filter(Boolean).length;
+  const hasCoreOccupation = /\b(?:manager|engineer|expert|specialist|leader|coordinator|surveyor|inspector|architect|designer|planner|scheduler|advisor|trainer|analyst|officer|supervisor|controller|technician|draftsman|economist|sociologist|environmentalist|hydrologist|geologist|adjudicator)\b/i.test(title);
+  const isCredibleConsultantTitle = /\bconsultant\b/i.test(title) && wordCount <= 7 && !/\b(?:the|of the|obligations?|eligibility|qualifications?|documents?|proposal|services?|organization|assumptions?|risks?|institution)\b/i.test(title);
+  if (!hasCoreOccupation && !isCredibleConsultantTitle) return true;
+  if (wordCount > 14 || /[.!?;]/.test(title)) return true;
+  if (/^(?:documents? establishing|associated with|institution of|obligations? of|eligibility of|qualifications? of|requirements? of|services? of|scope of|responsibilities? of)\b/i.test(title)) return true;
+  if (/\b(?:period of validity|securing declaration|request for proposals?|expression of interest|procurement and disposing entity|technical proposal submission|evaluation methodology|conflicts? of interest|government policy requires|number of risks)\b/i.test(title)) return true;
   if (/\bTECH-\d+[A-Z]?\b/i.test(title)) return true;
   if (/^(?:A|B|C|D|E|F)\s*-\s*Consultant$/i.test(title)) return true;
   if (/^(?:The Consultant|For the Consultant|Sub-consultant|Consultant\.?\s*The Consultant)$/i.test(title)) return true;
+  if (/\b(?:obligations?|eligibility|qualifications?|documents?|proposal forms?|submission sheet|contract clauses?|conditions of contract)\b.*\bconsultant\b/i.test(title)) return true;
   if (/^(?:Name of Expert|For Expert|Description of Key Expert|Replacement of Key Expert|Removal of Expert)$/i.test(title)) return true;
   if (/^(?:Instructions to Consultant|Assignments Consultant|Services while the Consultant|Facilities to be provided by the Consultant)$/i.test(title)) return true;
   if (/^(?:Appendix|Appendix\s+[A-Z]|Performance Declaration|Code of Conduct|Countersignature|Payments to the Consultant)/i.test(title)) return true;
@@ -222,6 +264,32 @@ function isInvalidTenderPositionTitle(value: string) {
   if (/^Removal of If the Client finds/i.test(title)) return true;
   if (/^(?:Preliminary Design\/FEED\/Basic Engineer|Design\/FEED\/Basic Engineer|Chartered\/Registered Engineer|Registered Quantity surveyor)$/i.test(title)) return true;
   return false;
+}
+
+export function getTenderPositionWarnings(position: any) {
+  const warnings: string[] = [];
+  const title = cleanText(position?.position_title);
+  if (isInvalidTenderPositionTitle(title)) warnings.push("This does not look like a real personnel position.");
+  if (!Number.isFinite(Number(position?.quantity)) || Number(position.quantity) <= 0) warnings.push("Quantity was not found in the source.");
+  if (!cleanText(position?.minimum_education)) warnings.push("Education requirement was not extracted.");
+  if (!cleanText(position?.general_experience) && !cleanText(position?.specific_experience)) warnings.push("Experience requirements were not extracted.");
+  if (!cleanText(position?.role_description)) warnings.push("Responsibilities were not extracted.");
+  if (!Array.isArray(position?.source_page_numbers) || position.source_page_numbers.length === 0) warnings.push("No source page evidence is attached.");
+  const evidenceFields = new Set((Array.isArray(position?.field_evidence) ? position.field_evidence : []).map((item: any) => cleanText(item?.field).toLowerCase()));
+  const evidenceRequiredFor = [
+    ["position_title", position?.position_title],
+    ["quantity", position?.quantity],
+    ["minimum_education", position?.minimum_education],
+    ["general_experience", position?.general_experience],
+    ["specific_experience", position?.specific_experience],
+    ["role_description", position?.role_description],
+  ] as Array<[string, any]>;
+  const missingEvidence = evidenceRequiredFor
+    .filter(([, value]) => value !== undefined && value !== null && String(value).trim())
+    .map(([field]) => field)
+    .filter((field) => !evidenceFields.has(field));
+  if (missingEvidence.length) warnings.push(`Missing field-level evidence for: ${missingEvidence.join(", ")}.`);
+  return warnings;
 }
 
 function hasPositionRequirementDetail(position: any) {
@@ -248,6 +316,41 @@ export function normalizeTenderRecord(tender: any) {
     .map((position, index) => normalizeTenderPosition(position, index))
     .filter((position) => position.position_title && !isInvalidTenderPosition(position));
 
+  const extractionWarnings = normalizedPositions.flatMap((position) =>
+    getTenderPositionWarnings(position).map((warning) => `${position.position_title}: ${warning}`),
+  );
+  const pageClassifications = (Array.isArray(tender?.page_classifications) ? tender.page_classifications : [])
+    .map((item: any) => ({
+      page_number: Number(item?.page_number || 0),
+      categories: toArray(item?.categories),
+      summary: cleanTenderRequirementText(item?.summary || ""),
+      readability: ["CLEAR", "PARTIAL", "UNREADABLE"].includes(String(item?.readability || "").toUpperCase()) ? String(item.readability).toUpperCase() : "PARTIAL",
+      has_staff_requirements: Boolean(item?.has_staff_requirements),
+      confidence: Math.max(0, Math.min(1, Number(item?.confidence || 0))),
+      warnings: toArray(item?.warnings),
+    }))
+    .filter((item: any) => Number.isInteger(item.page_number) && item.page_number > 0);
+  const tenderFieldEvidence = (Array.isArray(tender?.tender_field_evidence) ? tender.tender_field_evidence : [])
+    .map((evidence: any) => ({
+      field: cleanTenderRequirementText(evidence?.field || ""),
+      page_number: Number(evidence?.page_number || 0),
+      quote: cleanTenderRequirementText(evidence?.quote || ""),
+    }))
+    .filter((evidence: any) => evidence.field && Number.isInteger(evidence.page_number) && evidence.page_number > 0 && evidence.quote);
+  const tenderEvidenceFields = new Set(tenderFieldEvidence.map((item: any) => item.field.toLowerCase()));
+  const missingTenderEvidence = [
+    ["tender_title", tender?.tender_title || tender?.name],
+    ["client", tender?.client],
+    ["deadline", tender?.deadline],
+    ["scope_summary", tender?.scope_summary],
+    ["duration", tender?.duration],
+  ] as Array<[string, any]>;
+  missingTenderEvidence
+    .filter(([, value]) => String(value || "").trim())
+    .map(([field]) => field)
+    .filter((field) => !tenderEvidenceFields.has(field))
+    .forEach((field) => extractionWarnings.push(`Tender: Missing field-level evidence for ${field}.`));
+
   return {
     ...tender,
     tender_title: cleanTenderTitle(tender?.tender_title || tender?.name || ""),
@@ -259,9 +362,18 @@ export function normalizeTenderRecord(tender: any) {
     submission_type: cleanTenderRequirementText(tender?.submission_type || ""),
     tender_format: cleanTenderRequirementText(tender?.tender_format || ""),
     scope_summary: cleanTenderRequirementText(tender?.scope_summary || ""),
+    deadline: cleanTenderRequirementText(tender?.deadline || ""),
+    objectives: toArray(tender?.objectives),
+    deliverables: toArray(tender?.deliverables),
+    eligibility_requirements: toArray(tender?.eligibility_requirements),
+    evaluation_criteria: toArray(tender?.evaluation_criteria),
     special_requirements: toArray(tender?.special_requirements),
     global_team_constraints: toArray(tender?.global_team_constraints),
     project_sector: toArray(tender?.project_sector),
     positions: normalizedPositions,
+    page_classifications: pageClassifications,
+    tender_field_evidence: tenderFieldEvidence,
+    extraction_warnings: Array.from(new Set([...toArray(tender?.extraction_warnings), ...extractionWarnings])),
+    review_required: extractionWarnings.length > 0,
   };
 }

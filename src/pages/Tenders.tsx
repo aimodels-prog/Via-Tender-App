@@ -23,7 +23,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "motion/react";
 import clsx from "clsx";
 import { api, extractTenderTextFromFile } from "../lib/api";
-import { parseTenderText } from "../lib/gemini";
+import { parseTenderPdfFiles, parseTenderText } from "../lib/gemini";
 import { BrandingModal } from "../components/BrandingModal";
 import { ConfirmTenderModal } from "../components/ConfirmTenderModal";
 import { ConfigRequirementsModal } from "../components/ConfigRequirementsModal";
@@ -365,19 +365,24 @@ export default function Tenders() {
     }, 1500);
 
     try {
-      let combinedText = "";
-      for (let i = 0; i < fileList.length; i++) {
-        const text = await extractTenderTextFromFile(fileList[i]);
-        combinedText += `--- TENDER DOC: ${fileList[i].name} ---\n${text}\n\n`;
-      }
-
       updateTask(taskId, {
         message:
           fileList.length > 1
-            ? `AI classification (Stage 0): Consolidating and analyzing ${fileList.length} documents...`
-            : "AI classification (Stage 0): Identifying document format...",
+            ? `Native PDF analysis: reading every page across ${fileList.length} documents...`
+            : "Native PDF analysis: reading text, tables, layout, and scanned pages...",
       });
-      const parsedTender = await parseTenderText(combinedText);
+      const allPdf = fileList.every((file) => file.name.toLowerCase().endsWith('.pdf'));
+      let parsedTender: any;
+      if (allPdf) {
+        parsedTender = await parseTenderPdfFiles(fileList);
+      } else {
+        let combinedText = "";
+        for (let i = 0; i < fileList.length; i++) {
+          const text = await extractTenderTextFromFile(fileList[i]);
+          combinedText += `--- TENDER DOC: ${fileList[i].name} ---\n${text}\n\n`;
+        }
+        parsedTender = await parseTenderText(combinedText);
+      }
 
       updateTask(taskId, {
         status: "completed",

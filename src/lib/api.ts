@@ -195,14 +195,7 @@ function preprocessTenderText(rawPages: ExtractedDocumentPage[]): ExtractedDocum
   const priorityPages = nonBlankPages.filter((page) => priorityPageSet.has(page.pageNumber));
   const remainingPages = nonBlankPages.filter((page) => !priorityPageSet.has(page.pageNumber));
   const formatPage = (page: ExtractedDocumentPage) => `--- PAGE ${page.pageNumber} ---\n${page.text}`;
-  const priorityText = priorityPages.map(formatPage).join("\n\n");
-  const remainingText = remainingPages.map(formatPage).join("\n\n");
-  const text = [
-    "--- HIGH PRIORITY TENDER PAGES: staffing, TOR, scope, qualifications, experience, responsibilities ---",
-    priorityText,
-    "--- REMAINING TENDER PAGES: preserved for client, scope, submission, and special requirement context ---",
-    remainingText,
-  ].filter(Boolean).join("\n\n").trim();
+  const text = nonBlankPages.map(formatPage).join("\n\n").trim();
 
   return {
     text,
@@ -214,8 +207,8 @@ function preprocessTenderText(rawPages: ExtractedDocumentPage[]): ExtractedDocum
       blankPages,
       likelyAttachmentPages: [],
       cleanupNotes: [
-        "Used tender-specific extraction; preserved all selectable tender pages.",
-        `Prioritized ${priorityPages.length} page(s) containing staffing, TOR, scope, qualification, or experience signals.`,
+        "Preserved every selectable tender page in original page order.",
+        `Detected ${priorityPages.length} page(s) containing staffing, TOR, scope, qualification, or experience signals without discarding other pages.`,
       ],
     },
   };

@@ -420,7 +420,10 @@ function isTenderFormOrEvaluationText(value: string) {
     /\b(?:form|schedule)\s+tech[-\s]?\d/i.test(text) ||
     /\b(?:technical|financial)\s+proposal\b/i.test(text) ||
     /\bexperience\.\s*[✓✔]/i.test(text) ||
-    /^[A-Z]\.\s+Consultant'?s\b/i.test(text)
+    /^[A-Z]\.\s+Consultant'?s\b/i.test(text) ||
+    /^(?:documents? establishing|associated with|institution of|obligations? of|eligibility of|qualifications? of)\b/i.test(text) ||
+    /\b(?:period of validity|proposal securing declaration|request for proposals?|expression of interest|technical proposal submission sheet|evaluation methodology|government policy requires|number of risks)\b/i.test(text) ||
+    /\b(?:obligations?|eligibility|qualifications?|documents?|proposal forms?|submission sheet|conditions of contract)\b.*\bconsultant\b/i.test(text)
   );
 }
 
@@ -435,15 +438,28 @@ function positionKey(value: string) {
     .trim();
 }
 
+function tenderRoleIdentity(position: any) {
+  const title = positionKey(position?.position_title || "");
+  const lot = clean(position?.lot_reference || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const sourceNumber = Number(position?.source_position_number || 0) || "";
+  const category = clean(position?.expert_category || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const location = clean(position?.work_location || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return sourceNumber ? `${lot}|number:${sourceNumber}|${title}` : `${lot}|title:${title}|${category}|${location}`;
+}
+
 function isLikelyTenderPosition(value: string) {
   const title = normalizePositionTitle(value);
   if (!title || title.length < 4 || title.length > 90) return false;
   if (isTenderFormOrEvaluationText(value) || isTenderFormOrEvaluationText(title)) return false;
   if (!/^[A-Z]/.test(title)) return false;
+  const wordCount = title.split(/\s+/).filter(Boolean).length;
+  if (wordCount > 14 || /[.!?;]/.test(title)) return false;
   if (/^(scope|background|objective|deliverables|submission|evaluation|financial|technical|appendix|annex|table|minimum|general|specific|description|experience|organization|methodology|work plan)$/i.test(title)) return false;
   if (/\b(experience|organization|methodology|approach|comments?|suggestions?|data sheet|instruction|proposal|evaluation|criterion|criteria)\b/i.test(title) && !/\b(engineer|expert|specialist|manager|surveyor|inspector|planner|architect|advisor|coordinator|controller|officer|team leader|resident engineer)\b/i.test(title)) return false;
   if (/^(consultant engineer|consulting engineer)$/i.test(title)) return false;
-  return /\b(manager|engineer|expert|specialist|consultant|leader|director|coordinator|surveyor|inspector|architect|designer|planner|scheduler|advisor|trainer|analyst|officer|supervisor|controller|technician|draftsman|economist|sociologist|environmentalist|hydrologist|geologist|qa\/qc|hse|team leader|project manager|resident engineer)\b/i.test(title);
+  const hasCoreOccupation = /\b(manager|engineer|expert|specialist|leader|director|coordinator|surveyor|inspector|architect|designer|planner|scheduler|advisor|trainer|analyst|officer|supervisor|controller|technician|draftsman|economist|sociologist|environmentalist|hydrologist|geologist|qa\/qc|hse|team leader|project manager|resident engineer)\b/i.test(title);
+  const credibleConsultant = /\bconsultant\b/i.test(title) && wordCount <= 7 && !/\b(?:the|of the|obligations?|eligibility|qualifications?|documents?|proposal|services?|organization|assumptions?|risks?|institution)\b/i.test(title);
+  return hasCoreOccupation || credibleConsultant;
 }
 
 function extractQuantity(line: string) {
@@ -452,7 +468,7 @@ function extractQuantity(line: string) {
     line.match(/\((\d{1,2})\s*(?:nos?\.?|persons?|staff)?\)/i) ||
     line.match(/\b(\d{1,2})\s*(?:nos?\.?|persons?|staff)\b/i) ||
     line.match(/^\s*(\d{1,2})\s+[-.)]?\s+[A-Za-z]/);
-  return match ? Number(match[1]) : 1;
+  return match ? Number(match[1]) : undefined;
 }
 
 function stripRequirementNoise(line: string) {
@@ -799,12 +815,12 @@ function extractKeyExpertPositionRows(lines: TextLine[]) {
 
     const title = normalizePositionTitle(titleText);
     if (!isLikelyTenderPosition(title)) return;
-    const key = positionKey(title);
+    const key = `${match[1]}|${positionKey(title)}`;
     if (!key || seen.has(key)) return;
     seen.add(key);
     positions.push({
       position_title: title,
-      quantity: 1,
+      quantity: undefined,
       minimum_education: "",
       minimum_years_experience: undefined,
       general_experience: "",
@@ -902,13 +918,13 @@ export function extractUniversalTenderFacts(rawText: string): UniversalTenderFac
     });
     const byTitle = new Map<string, any>();
     reliablePositions.forEach((position) => {
-      const key = positionKey(position.position_title);
+      const key = tenderRoleIdentity(position);
       const current = byTitle.get(key) || {};
       byTitle.set(key, {
         ...current,
         ...position,
         position_title: current.position_title || position.position_title,
-        quantity: current.quantity || position.quantity || 1,
+        quantity: current.quantity || position.quantity || undefined,
         minimum_education: current.minimum_education || position.minimum_education || "",
         minimum_years_experience: current.minimum_years_experience || position.minimum_years_experience,
         general_experience: current.general_experience || position.general_experience || "",

@@ -114,6 +114,39 @@ export async function parseTenderText(text: string): Promise<any> {
   }
 }
 
+export async function parseTenderPdfFiles(files: File[]): Promise<any> {
+  try {
+    const formData = new FormData();
+    files.forEach((file) => formData.append('files', file, file.name));
+    const response = await fetch('/api/parse-tender-files', { method: 'POST', body: formData });
+    const { data, error } = await readApiResponse(response);
+    if (!response.ok) throw new Error(error || data.error || `Tender upload failed (${response.status}).`);
+    const jobId = data.jobId;
+    if (!jobId) throw new Error('Native tender extraction did not return a job id.');
+
+    const startedAt = Date.now();
+    const timeoutMs = 2 * 60 * 60 * 1000;
+    while (Date.now() - startedAt < timeoutMs) {
+      await new Promise((resolve) => setTimeout(resolve, 4000));
+      const pollResponse = await fetch(`/api/parse-tender/${encodeURIComponent(jobId)}`);
+      const { data: pollData, error: pollError } = await readApiResponse(pollResponse);
+      if (!pollResponse.ok) throw new Error(pollError || pollData.error || 'Failed to check tender extraction status.');
+      if (pollData.status === 'completed') {
+        const tender = pollData.tender || {};
+        if (!String(tender.tender_title || tender.name || tender.client || '').trim() && (!Array.isArray(tender.positions) || tender.positions.length === 0)) {
+          throw new Error('Native PDF extraction completed but returned no tender information.');
+        }
+        return tender;
+      }
+      if (pollData.status === 'failed') throw new Error(pollData.error || 'Native PDF tender extraction failed.');
+    }
+    throw new Error('Tender extraction is still running after two hours. Check the extraction job again later.');
+  } catch (error) {
+    console.error('Parse Tender PDF Error:', error);
+    throw error;
+  }
+}
+
 export async function runMatchEngine(tender: any, positionId: string, experts: any[]): Promise<any[]> {
   const aiSettings = await api.getAISettings();
   try {

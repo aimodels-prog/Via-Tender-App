@@ -4,6 +4,7 @@ import { PDFParse } from "pdf-parse";
 import { extractUniversalCVFacts, extractUniversalTenderFacts } from "../src/lib/universalExtraction.ts";
 import { normalizeExpertCollections, postProcessExtractedExpert } from "../src/lib/cvPostProcess.ts";
 import { normalizeTenderRecord } from "../src/lib/tenderPostProcess.ts";
+import { mergeTenderExtractions, selectTenderPagesForPro } from "../src/backend/ai.ts";
 
 async function readDocxText(path: string) {
   const result = await mammoth.extractRawText({ buffer: fs.readFileSync(path) });
@@ -143,6 +144,57 @@ async function main() {
   ["Instructions to Consultant", "Name of Expert", "CODE OF CONDUCT FOR EXPERT", "Appendix B - Key Expert", "The Consultant", "FIDIC International Federation of Consulting Engineer"].forEach((title) => {
     if (cleanedTenderTitles.includes(title)) throw new Error(`Expected cleaned tender positions to remove ${title}.`);
   });
+
+  const screenshotFailureTender = normalizeTenderRecord({
+    positions: [
+      { position_title: "Documents Establishing the Eligibility of the Consultant", minimum_education: "Period of Validity of Proposals", role_description: "Submit eligibility declarations" },
+      { position_title: "Documents Establishing the Qualifications of the Consultant" },
+      { position_title: "Institution of Professional Engineer", role_description: "The appointing authority for the Adjudicator" },
+      { position_title: "E Obligations of the Consultant", role_description: "Government policy requires consultants to provide impartial advice" },
+      { position_title: "Associated with these assumptions are a number of risks. The Consultant" },
+      { position_title: "Materials & Quality Control Engineer", quantity: 1, minimum_years_experience: 8, minimum_education: "Bachelor's degree in Civil Engineering", role_description: "Prepare the Quality Assurance Plan", source_page_numbers: [145], source_quotes: ["Materials & Quality Control Engineer"] },
+    ],
+  });
+  const screenshotTitles = screenshotFailureTender.positions.map((item: any) => item.position_title);
+  if (screenshotTitles.length !== 1 || screenshotTitles[0] !== "Materials & Quality Control Engineer") {
+    throw new Error(`Screenshot false positions were not rejected: ${screenshotTitles.join(", ")}`);
+  }
+
+  const unknownFactsTender = normalizeTenderRecord({ positions: [{ position_title: "Road Engineer" }] });
+  if (unknownFactsTender.positions[0].quantity !== undefined) throw new Error("Missing quantity must not default to 1.");
+  if (unknownFactsTender.positions[0].minimum_years_experience !== undefined) throw new Error("Missing years must not default to 0.");
+  if (unknownFactsTender.positions[0].nationality_preference !== "") throw new Error("Missing nationality must not default to Any.");
+
+  const repeatedTitleTender = mergeTenderExtractions([
+    { positions: [{ position_title: "Civil Engineer", source_position_number: 2, lot_reference: "Lot A", work_location: "North", minimum_education: "BSc Civil Engineering" }] },
+    { positions: [{ position_title: "Civil Engineer", source_position_number: 2, lot_reference: "Lot B", work_location: "South", minimum_education: "MSc Civil Engineering" }] },
+  ]);
+  if (repeatedTitleTender.positions.length !== 2) throw new Error("Same-title positions from separate lots must remain separate.");
+
+  const longRequirement = Array.from({ length: 2500 }, (_, index) => `Responsibility ${index + 1}`).join("; ");
+  const untruncatedTender = normalizeTenderRecord({ positions: [{ position_title: "Resident Engineer", role_description: longRequirement }] });
+  if (untruncatedTender.positions[0].role_description.length < longRequirement.length * 0.9) {
+    throw new Error("Tender role requirements must not be silently truncated.");
+  }
+
+  const pageClassifications = Array.from({ length: 200 }, (_, index) => ({
+    page_number: index + 1,
+    categories: ["contract_clause"],
+    readability: "CLEAR",
+    confidence: 0.99,
+    has_staff_requirements: false,
+    summary: "Standard contract conditions",
+  }));
+  pageClassifications[49] = { ...pageClassifications[49], categories: ["staff_schedule"], has_staff_requirements: true, summary: "Key expert schedule" };
+  pageClassifications[99] = { ...pageClassifications[99], confidence: 0.5 };
+  pageClassifications[149] = { ...pageClassifications[149], readability: "UNREADABLE" };
+  const routing = selectTenderPagesForPro(pageClassifications, 1, 200, { confidenceThreshold: 0.85, contextRadius: 2 });
+  [48, 49, 50, 51, 52, 98, 99, 100, 101, 102, 148, 149, 150, 151, 152].forEach((page) => {
+    if (!routing.selectedPages.includes(page)) throw new Error(`Expected relevance routing to send page ${page} to Pro.`);
+  });
+  if (!routing.skippedPages.includes(20)) throw new Error("Expected high-confidence contract boilerplate to skip Pro extraction.");
+  const noClassificationRouting = selectTenderPagesForPro([], 1, 25);
+  if (noClassificationRouting.selectedPages.length !== 25) throw new Error("Unclassified pages must always be sent to Pro.");
 
   const torPaths = [
     "C:/Users/Dell/Downloads/TOR 2024.OM.RFP.49_1.pdf",

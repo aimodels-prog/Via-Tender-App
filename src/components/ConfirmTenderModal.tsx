@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Save, AlertCircle, Loader2, Image as ImageIcon } from 'lucide-react';
+import { X, Save, AlertCircle, Loader2, Image as ImageIcon, Plus, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
+import { getTenderPositionWarnings } from '../lib/tenderPostProcess';
 
 interface ConfirmTenderModalProps {
   tender: any;
@@ -13,6 +14,13 @@ interface ConfirmTenderModalProps {
 const toArray = (value: any): string[] => Array.isArray(value) ? value.map(item => String(item || '').trim()).filter(Boolean) : value ? [String(value).trim()].filter(Boolean) : [];
 const joinLines = (value: any) => toArray(value).join('\n');
 const splitLines = (value: string) => value.split('\n').map(item => item.trim()).filter(Boolean);
+const joinEvidence = (value: any) => (Array.isArray(value) ? value : [])
+  .map((item: any) => `${item.field || ''} | ${item.page_number || ''} | ${item.quote || ''}`)
+  .join('\n');
+const splitEvidence = (value: string) => value.split('\n').map((line) => {
+  const [field = '', page = '', ...quote] = line.split('|');
+  return { field: field.trim(), page_number: Number(page.trim()), quote: quote.join('|').trim() };
+}).filter((item) => item.field && Number.isInteger(item.page_number) && item.page_number > 0 && item.quote);
 
 export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderModalProps) {
   const [editedTender, setEditedTender] = useState({
@@ -30,6 +38,15 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
   const [isSaving, setIsSaving] = useState(false);
   const [savedBranding, setSavedBranding] = useState({ header_base64: "", footer_base64: "", header_name: "", footer_name: "" });
   const [brandingSelection, setBrandingSelection] = useState("default");
+  const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
+  const positionWarnings = useMemo(
+    () => editedTender.positions.map((position: any) => getTenderPositionWarnings(position)),
+    [editedTender.positions],
+  );
+  const tenderWarnings = toArray(editedTender.extraction_warnings).filter((warning) =>
+    !positionWarnings.some((warnings: string[]) => warnings.some((positionWarning) => warning.endsWith(positionWarning))),
+  );
+  const warningCount = positionWarnings.reduce((count: number, warnings: string[]) => count + warnings.length, 0) + tenderWarnings.length;
 
   useEffect(() => {
     async function loadGlobalBranding() {
@@ -53,6 +70,24 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
     const newPositions = [...editedTender.positions];
     newPositions[idx] = { ...newPositions[idx], [field]: value };
     setEditedTender({ ...editedTender, positions: newPositions });
+    setWarningsAcknowledged(false);
+  };
+
+  const removePosition = (idx: number) => {
+    setEditedTender({ ...editedTender, positions: editedTender.positions.filter((_: any, index: number) => index !== idx) });
+    setWarningsAcknowledged(false);
+  };
+
+  const addPosition = () => {
+    setEditedTender({
+      ...editedTender,
+      positions: [...editedTender.positions, {
+        position_title: '', quantity: undefined, minimum_years_experience: undefined,
+        nationality_preference: '', minimum_education: '', role_description: '',
+        general_experience: '', specific_experience: '', source_page_numbers: [], source_quotes: [],
+      }],
+    });
+    setWarningsAcknowledged(false);
   };
 
   const handleBrandingSelection = (value: string) => {
@@ -90,6 +125,10 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
       alert("No tender positions were extracted. Please re-upload the tender and wait for extraction to complete before saving.");
       return;
     }
+    if (warningCount > 0 && !warningsAcknowledged) {
+      alert("Review the extraction warnings and acknowledge them before saving.");
+      return;
+    }
     setIsSaving(true);
     await onSave(editedTender);
     setIsSaving(false);
@@ -101,7 +140,7 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
-        className="bg-white rounded-2xl shadow-xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden"
+        className="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[90vh] flex flex-col overflow-hidden"
       >
         <div className="flex items-center justify-between p-6 border-b border-slate-100 bg-slate-50/50">
           <div>
@@ -119,8 +158,31 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-8">
-          <div className="grid grid-cols-2 gap-6">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden p-6 space-y-8">
+          {tenderWarnings.length > 0 && (
+            <div className="border border-amber-200 bg-amber-50 rounded-lg p-4 text-sm text-amber-900">
+              <p className="font-semibold">Extraction needs attention</p>
+              <ul className="mt-2 list-disc pl-5 space-y-1">
+                {tenderWarnings.map((warning, index) => <li key={index}>{warning}</li>)}
+              </ul>
+            </div>
+          )}
+          {editedTender.extraction_audit?.pageRouting && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 border border-slate-200 bg-slate-50 rounded-lg p-4">
+              {[
+                ['Pages classified', editedTender.extraction_audit.pageRouting.pagesClassified],
+                ['Pages sent to Pro', editedTender.extraction_audit.pageRouting.pagesSentToPro],
+                ['Pages skipped by Pro', editedTender.extraction_audit.pageRouting.pagesSkippedByPro],
+                ['Pro reduction', `${editedTender.extraction_audit.pageRouting.proReductionPercent}%`],
+              ].map(([label, value]) => (
+                <div key={String(label)}>
+                  <p className="text-[10px] font-semibold uppercase text-slate-500">{label}</p>
+                  <p className="mt-1 text-lg font-bold text-slate-900">{value}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
               <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Internal Code</label>
               <input 
@@ -158,6 +220,24 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                 className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
               />
             </div>
+            {[
+              ['country', 'Country'],
+              ['tender_number', 'Tender Number'],
+              ['deadline', 'Submission Deadline'],
+              ['duration', 'Project Duration'],
+              ['submission_type', 'Submission Type'],
+            ].map(([field, label]) => (
+              <div className="space-y-2" key={field}>
+                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">{label}</label>
+                <input
+                  type="text"
+                  value={(editedTender as any)[field] || ''}
+                  placeholder="Not extracted"
+                  onChange={e => setEditedTender({ ...editedTender, [field]: e.target.value })}
+                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all"
+                />
+              </div>
+            ))}
           </div>
 
           <div className="space-y-4">
@@ -175,7 +255,7 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Special Requirements</label>
                 <textarea
@@ -195,18 +275,77 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                 />
               </div>
             </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {[
+                ['project_sector', 'Project Sectors'],
+                ['objectives', 'Objectives'],
+                ['deliverables', 'Deliverables'],
+                ['eligibility_requirements', 'Eligibility Requirements'],
+                ['evaluation_criteria', 'Evaluation Criteria'],
+              ].map(([field, label]) => (
+                <div className="space-y-2" key={field}>
+                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">{label}</label>
+                  <textarea
+                    value={joinLines((editedTender as any)[field])}
+                    onChange={e => setEditedTender({ ...editedTender, [field]: splitLines(e.target.value) })}
+                    placeholder="One item per line"
+                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none min-h-[100px]"
+                  />
+                </div>
+              ))}
+            </div>
+
+            <details className="border border-slate-200 rounded-lg bg-slate-50">
+              <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-slate-700">
+                Page coverage ({editedTender.page_classifications?.length || 0} classified pages)
+              </summary>
+              <div className="border-t border-slate-200 max-h-72 overflow-auto divide-y divide-slate-200">
+                {(editedTender.page_classifications || []).map((page: any) => (
+                  <div key={page.page_number} className="px-4 py-3 text-xs text-slate-700 grid grid-cols-[60px_100px_1fr] gap-3">
+                    <span className="font-semibold">Page {page.page_number}</span>
+                    <span className={page.readability === 'CLEAR' ? 'text-emerald-700' : 'text-amber-700'}>{page.readability}</span>
+                    <span>{joinLines(page.categories).replace(/\n/g, ', ')}{page.summary ? `: ${page.summary}` : ''}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Tender field evidence</label>
+              <textarea
+                value={joinEvidence(editedTender.tender_field_evidence)}
+                placeholder="field | page | exact source quote"
+                onChange={e => setEditedTender({ ...editedTender, tender_field_evidence: splitEvidence(e.target.value) })}
+                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-mono focus:border-blue-500 outline-none min-h-[120px]"
+              />
+            </div>
           </div>
 
           <div>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Extracted Positions ({editedTender.positions.length})</h3>
+              <button type="button" onClick={addPosition} className="inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 rounded-lg">
+                <Plus size={16} /> Add position
+              </button>
             </div>
             
             <div className="space-y-4">
               {editedTender.positions.map((pos: any, idx: number) => (
-                <div key={idx} className="p-4 border border-slate-200 rounded-xl bg-slate-50/50">
-                  <div className="grid grid-cols-3 gap-4 mb-4">
-                    <div className="col-span-2 space-y-1">
+                <div key={idx} className="p-4 border border-slate-200 rounded-lg bg-slate-50/50">
+                  <div className="flex items-start justify-between gap-4 mb-3">
+                    <div className="min-w-0">
+                      <p className="text-xs font-semibold text-slate-500">Position {idx + 1}</p>
+                      {positionWarnings[idx]?.length > 0 && (
+                        <div className="mt-2 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                          {positionWarnings[idx].join(' ')}
+                        </div>
+                      )}
+                    </div>
+                    <button type="button" onClick={() => removePosition(idx)} title="Remove position" className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md">
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                    <div className="md:col-span-2 space-y-1">
                       <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Position Title</label>
                       <input 
                         type="text" 
@@ -219,19 +358,21 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                       <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Quantities Needed</label>
                       <input 
                         type="number" 
-                        value={pos.quantity || 1}
-                        onChange={e => handlePositionChange(idx, 'quantity', parseInt(e.target.value))}
+                        value={pos.quantity ?? ''}
+                        placeholder="Not extracted"
+                        onChange={e => handlePositionChange(idx, 'quantity', e.target.value ? parseInt(e.target.value) : undefined)}
                         className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none"
                       />
                     </div>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-1">
                       <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Years Exp Reqd.</label>
                       <input 
                         type="number" 
-                        value={pos.minimum_years_experience || pos.years_experience || pos.required_years || 0}
-                        onChange={e => handlePositionChange(idx, 'minimum_years_experience', parseInt(e.target.value))}
+                        value={pos.minimum_years_experience ?? pos.years_experience ?? pos.required_years ?? ''}
+                        placeholder="Not extracted"
+                        onChange={e => handlePositionChange(idx, 'minimum_years_experience', e.target.value ? parseInt(e.target.value) : undefined)}
                         className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none"
                       />
                     </div>
@@ -239,11 +380,41 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                       <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Nationality Quota</label>
                       <input 
                         type="text" 
-                        value={pos.nationality_preference || 'Any'}
+                        value={pos.nationality_preference || ''}
+                        placeholder="Not stated"
                         onChange={e => handlePositionChange(idx, 'nationality_preference', e.target.value)}
                         className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none"
                       />
                     </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                    {[
+                      ['source_position_number', 'Source Position No.', 'number'],
+                      ['source_document', 'Source Document', 'text'],
+                      ['lot_reference', 'Lot / Package', 'text'],
+                      ['expert_category', 'Expert Category', 'text'],
+                      ['input_months', 'Input Months', 'number'],
+                      ['work_location', 'Work Location', 'text'],
+                      ['residency_requirement', 'Residency Requirement', 'text'],
+                      ['minimum_specific_years', 'Specific Years', 'number'],
+                      ['minimum_similar_projects', 'Similar Projects', 'number'],
+                      ['evaluation_points', 'Evaluation Points', 'number'],
+                    ].map(([field, label, type]) => (
+                      <div className="space-y-1" key={field}>
+                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
+                        <input
+                          type={type}
+                          value={pos[field] ?? ''}
+                          placeholder="Not extracted"
+                          onChange={e => handlePositionChange(idx, field, type === 'number' ? (e.target.value ? Number(e.target.value) : undefined) : e.target.value)}
+                          className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none"
+                        />
+                      </div>
+                    ))}
+                    <label className="flex items-center gap-2 text-sm text-slate-700 pt-5">
+                      <input type="checkbox" checked={Boolean(pos.is_key_expert)} onChange={e => handlePositionChange(idx, 'is_key_expert', e.target.checked)} />
+                      Key expert
+                    </label>
                   </div>
                   
                   <div className="space-y-1 mt-4">
@@ -281,6 +452,72 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                       className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none min-h-[60px]"
                     />
                   </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                    {[
+                      ['regional_experience', 'Regional Experience'],
+                      ['country_experience', 'Country Experience'],
+                    ].map(([field, label]) => (
+                      <div className="space-y-1" key={field}>
+                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
+                        <textarea value={pos[field] || ''} onChange={e => handlePositionChange(idx, field, e.target.value)} className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none min-h-[60px]" />
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                    {[
+                      ['required_sector_experience', 'Required Sector Experience'],
+                      ['mandatory_skills', 'Mandatory Skills'],
+                      ['required_software', 'Required Software'],
+                      ['required_certifications', 'Required Certifications'],
+                      ['professional_memberships', 'Professional Memberships'],
+                      ['required_languages', 'Required Languages'],
+                      ['position_deliverables', 'Position Deliverables'],
+                      ['required_keywords', 'Required Keywords'],
+                    ].map(([field, label]) => (
+                      <div className="space-y-1" key={field}>
+                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
+                        <textarea
+                          value={joinLines(pos[field])}
+                          placeholder="One item per line"
+                          onChange={e => handlePositionChange(idx, field, splitLines(e.target.value))}
+                          className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none min-h-[70px]"
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Source pages</label>
+                      <input
+                        type="text"
+                        value={(pos.source_page_numbers || []).join(', ')}
+                        placeholder="No source pages attached"
+                        onChange={e => handlePositionChange(idx, 'source_page_numbers', e.target.value.split(',').map((value: string) => Number(value.trim())).filter((value: number) => Number.isInteger(value) && value > 0))}
+                        className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Source evidence</label>
+                      <textarea
+                        value={joinLines(pos.source_quotes)}
+                        placeholder="Exact quotations proving this position"
+                        onChange={e => handlePositionChange(idx, 'source_quotes', splitLines(e.target.value))}
+                        className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none min-h-[60px]"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-1 mt-4">
+                    <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Field-level evidence</label>
+                    <textarea
+                      value={joinEvidence(pos.field_evidence)}
+                      placeholder="field | page | exact source quote"
+                      onChange={e => handlePositionChange(idx, 'field_evidence', splitEvidence(e.target.value))}
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm font-mono focus:border-blue-500 outline-none min-h-[110px]"
+                    />
+                  </div>
                 </div>
               ))}
               
@@ -290,6 +527,12 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                 </div>
               )}
             </div>
+            {warningCount > 0 && (
+              <label className="mt-5 flex items-start gap-3 p-3 border border-amber-200 bg-amber-50 rounded-lg text-sm text-amber-900">
+                <input type="checkbox" checked={warningsAcknowledged} onChange={e => setWarningsAcknowledged(e.target.checked)} className="mt-0.5" />
+                <span>I reviewed {warningCount} extraction warning{warningCount === 1 ? '' : 's'} against the source tender and approve the remaining missing information.</span>
+              </label>
+            )}
           </div>
           
           <div>
