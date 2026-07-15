@@ -124,8 +124,8 @@ export default function Sidebar({ isOpen, setIsOpen }: { isOpen?: boolean, setIs
           <nav className="space-y-1 overflow-y-auto custom-scrollbar flex-1 pb-4">
             <SidebarItem isCollapsed={isCollapsed} onClick={() => setIsOpen?.(false)} to="/dashboard" icon={Home} label="Dashboard" />
             {!hiddenModules.includes('experts') && <SidebarItem isCollapsed={isCollapsed} onClick={() => setIsOpen?.(false)} to="/experts" icon={Users} label="Experts" />}
-            {!hiddenModules.includes('tenders') && <SidebarItem isCollapsed={isCollapsed} onClick={() => setIsOpen?.(false)} to="/tenders" icon={Briefcase} label="Tenders" />}
-            {!hiddenModules.includes('matches') && <SidebarItem isCollapsed={isCollapsed} onClick={() => setIsOpen?.(false)} to="/matches" icon={Target} label="Matching" />}
+            {!hiddenModules.includes('tenders') && <SidebarItem isCollapsed={isCollapsed} onClick={() => setIsOpen?.(false)} to="/matches" icon={Briefcase} label="Matching" />}
+            {!hiddenModules.includes('matches') && <SidebarItem isCollapsed={isCollapsed} onClick={() => setIsOpen?.(false)} to="/tenders" icon={Target} label="Tenders" />}
             {!hiddenModules.includes('generated-cvs') && <SidebarItem isCollapsed={isCollapsed} onClick={() => setIsOpen?.(false)} to="/generated-cvs" icon={FileCheck} label="Generate CV" />}
             <SidebarItem isCollapsed={isCollapsed} onClick={() => setIsOpen?.(false)} to="/settings" icon={Settings} label="Settings" />
           </nav>
