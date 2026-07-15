@@ -899,7 +899,6 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
       if (!isLikelyStaffRoleTitle(title)) return;
     }
     const current = byTitle.get(key) || {};
-    const preferCurrentSource = hasAuthoritativeRoleTable && Boolean(current.recovered_from_text);
     byTitle.set(key, {
       ...position,
       ...current,
@@ -910,11 +909,11 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
       lot_reference: bestText(current.lot_reference, position.lot_reference),
       expert_category: bestText(current.expert_category, position.expert_category),
       work_location: bestText(current.work_location, position.work_location),
-      minimum_education: preferCurrentSource ? current.minimum_education || position.minimum_education : bestText(current.minimum_education, position.minimum_education),
+      minimum_education: bestText(current.minimum_education, position.minimum_education),
       minimum_years_experience: Math.max(Number(current.minimum_years_experience || 0), Number(position.minimum_years_experience || 0)) || undefined,
       general_experience: strictestText(current.general_experience, position.general_experience),
       specific_experience: strictestText(current.specific_experience, position.specific_experience),
-      role_description: preferCurrentSource ? current.role_description || position.role_description || position.description : bestText(current.role_description, position.role_description || position.description),
+      role_description: bestText(current.role_description, position.role_description || position.description),
       required_sector_experience: bestArray(current.required_sector_experience, position.required_sector_experience),
       mandatory_skills: bestArray(current.mandatory_skills, position.mandatory_skills),
       required_keywords: bestArray(current.required_keywords, position.required_keywords),
