@@ -523,16 +523,16 @@ export function normalizeTenderRecord(tender: any) {
       return { title: cleanText(position.position_title), missing };
     })
     .filter((item) => item.missing.length > 0);
-  const blockingIssues: string[] = [];
-  if (!roleCount) blockingIssues.push("No real tender personnel positions were extracted.");
+  const qualityIssues: string[] = [];
+  if (!roleCount) qualityIssues.push("No real tender personnel positions were extracted.");
   if (roleCount >= 3 && sourceBackedCount / roleCount < 0.5) {
-    blockingIssues.push("Fewer than half of the extracted positions have source-page evidence.");
+    qualityIssues.push("Fewer than half of the extracted positions have source-page evidence.");
   }
   if (incompleteCorePositions.length) {
-    blockingIssues.push(`Some positions are missing core requirements: ${incompleteCorePositions.slice(0, 10).map((item) => `${item.title || "Untitled"} missing ${item.missing.join(", ")}`).join("; ")}${incompleteCorePositions.length > 10 ? "..." : ""}.`);
+    qualityIssues.push(`Some positions are missing core requirements: ${incompleteCorePositions.slice(0, 10).map((item) => `${item.title || "Untitled"} missing ${item.missing.join(", ")}`).join("; ")}${incompleteCorePositions.length > 10 ? "..." : ""}.`);
   }
   if (missingCoreEvidencePositions.length) {
-    blockingIssues.push(`Some populated role fields are not backed by field-level evidence: ${missingCoreEvidencePositions.slice(0, 10).map((item) => `${item.title || "Untitled"} missing evidence for ${item.missing.join(", ")}`).join("; ")}${missingCoreEvidencePositions.length > 10 ? "..." : ""}.`);
+    qualityIssues.push(`Some populated role fields are not backed by field-level evidence: ${missingCoreEvidencePositions.slice(0, 10).map((item) => `${item.title || "Untitled"} missing evidence for ${item.missing.join(", ")}`).join("; ")}${missingCoreEvidencePositions.length > 10 ? "..." : ""}.`);
   }
 
   return {
@@ -557,8 +557,8 @@ export function normalizeTenderRecord(tender: any) {
     positions: normalizedPositions,
     page_classifications: pageClassifications,
     tender_field_evidence: tenderFieldEvidence,
-    extraction_warnings: Array.from(new Set([...retainedWarnings, ...extractionWarnings])),
-    extraction_blocking_issues: blockingIssues,
+    extraction_warnings: Array.from(new Set([...retainedWarnings, ...extractionWarnings, ...qualityIssues.map((issue) => `Review required: ${issue}`)])),
+    extraction_blocking_issues: [],
     extraction_quality: {
       raw_position_count: positions.length,
       merged_position_count: roleCount,
@@ -568,6 +568,6 @@ export function normalizeTenderRecord(tender: any) {
       incomplete_core_positions: incompleteCorePositions.length,
       missing_core_evidence_positions: missingCoreEvidencePositions.length,
     },
-    review_required: retainedWarnings.length > 0 || extractionWarnings.length > 0,
+    review_required: retainedWarnings.length > 0 || extractionWarnings.length > 0 || qualityIssues.length > 0,
   };
 }

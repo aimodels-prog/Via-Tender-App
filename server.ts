@@ -989,12 +989,6 @@ async function startServer() {
     if (!Array.isArray(data.positions) || data.positions.length === 0) {
       return res.status(400).json({ error: "Cannot save tender because no positions were extracted." });
     }
-    if (Array.isArray(data.extraction_blocking_issues) && data.extraction_blocking_issues.length > 0) {
-      return res.status(422).json({
-        error: `Cannot save this extraction until critical quality issues are resolved: ${data.extraction_blocking_issues.join(" ")}`,
-        blockingIssues: data.extraction_blocking_issues,
-      });
-    }
     await query(
       `insert into tenders (id, tender_title, client, status, deadline, data)
        values ($1,$2,$3,$4,$5,$6::jsonb)`,

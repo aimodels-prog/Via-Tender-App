@@ -1225,6 +1225,267 @@ function sourcePageTextsToTenderText(pageTexts: Array<{ page_number: number; tex
     .join("\n\n");
 }
 
+function selectEconomyTenderPageTexts(pageTexts: Array<{ page_number: number; text: string }>) {
+  const pages = (Array.isArray(pageTexts) ? pageTexts : [])
+    .filter((page) => Number.isInteger(Number(page.page_number)) && String(page.text || "").trim())
+    .sort((a, b) => Number(a.page_number) - Number(b.page_number));
+  if (pages.length <= 40) {
+    return {
+      selectedPages: pages,
+      skippedPages: [] as number[],
+      pageScores: pages.map((page) => ({ page_number: page.page_number, score: 0, reasons: ["small_document_keep_all"] })),
+    };
+  }
+
+  const relevantSignals: Array<[RegExp, number, string]> = [
+    [/\b(?:key\s*experts?|professional\s*staff|staff(?:ing)?\s*(?:schedule|requirements?|inputs?)|personnel|consultant'?s\s*team|team\s*composition)\b/i, 8, "staffing"],
+    [/\b(?:team\s*leader|resident\s*engineer|project\s*manager|specialist|expert|engineer|surveyor|inspector|economist|planner|advisor|coordinator|technician)\b/i, 5, "role_title"],
+    [/\b(?:qualification|minimum\s*education|academic|degree|bachelor|master|phd|chartered|registered|licen[cs]e|practi[cs]ing\s*certificate|professional\s*registration|membership)\b/i, 6, "qualification"],
+    [/\b(?:experience|years?|similar\s*(?:assignments?|projects?)|post[-\s]?graduate|international\s*experience|local\s*experience|regional\s*experience|country\s*experience)\b/i, 6, "experience"],
+    [/\b(?:terms\s*of\s*reference|tor|scope\s*of\s*(?:services|work)|duties|responsibilities|tasks|activities|deliverables|outputs|objectives)\b/i, 7, "tor_scope"],
+    [/\b(?:input\s*months?|person[-\s]?months?|staff[-\s]?months?|man[-\s]?months?|level\s*of\s*effort)\b/i, 7, "input_months"],
+    [/\b(?:evaluation\s*criteria|technical\s*score|points?|marks?|weighted|scoring|criteria)\b/i, 5, "evaluation"],
+    [/\b(?:deadline|submission\s*(?:date|deadline)|closing\s*date|proposal\s*submission|bid\s*submission)\b/i, 5, "deadline"],
+    [/\b(?:data\s*sheet|request\s*for\s*proposals?|rfp|invitation|procurement|client|employer|contracting\s*authority|tender\s*number|reference\s*number)\b/i, 4, "tender_facts"],
+    [/\b(?:language|fluency|software|autocad|primavera|ms\s*project|gis|bim|fidic|safeguards?|esmp|esia)\b/i, 4, "skills_tools"],
+  ];
+  const boilerplateSignals: Array<[RegExp, number, string]> = [
+    [/\b(?:general\s*conditions\s*of\s*contract|conditions\s*of\s*contract|contract\s*agreement|special\s*conditions\s*of\s*contract)\b/i, -7, "contract_conditions"],
+    [/\b(?:payment\s*terms|tax(?:es)?|bank\s*guarantee|performance\s*security|advance\s*payment|liquidated\s*damages)\b/i, -6, "commercial_boilerplate"],
+    [/\b(?:fraud\s*and\s*corruption|eligible\s*countries|conflict\s*of\s*interest|code\s*of\s*conduct|sanctions)\b/i, -5, "standard_policy"],
+    [/\b(?:power\s*of\s*attorney|signature|form\s*of\s*bid|bid\s*security|proposal\s*securing\s*declaration|letter\s*of\s*submission)\b/i, -5, "forms"],
+    [/\b(?:appendix|annex)\b/i, -1, "appendix_possible_boilerplate"],
+  ];
+
+  const scored = pages.map((page) => {
+    const text = String(page.text || "");
+    const reasons: string[] = [];
+    let score = 0;
+    for (const [pattern, weight, reason] of relevantSignals) {
+      if (pattern.test(text)) {
+        score += weight;
+        reasons.push(reason);
+      }
+    }
+    for (const [pattern, weight, reason] of boilerplateSignals) {
+      if (pattern.test(text)) {
+        score += weight;
+        reasons.push(reason);
+      }
+    }
+    if (/\bK[-\s]?\d+\b|\bposition\s+\d+\b|\bno\.\s*of\s*(?:staff|persons?)\b/i.test(text)) {
+      score += 5;
+      reasons.push("position_number_or_quantity");
+    }
+    if (text.length < 120) {
+      score -= 3;
+      reasons.push("very_short_text");
+    }
+    return { page_number: Number(page.page_number), score, reasons };
+  });
+
+  const pageByNumber = new Map(pages.map((page) => [Number(page.page_number), page]));
+  const selected = new Set<number>();
+  const addPage = (pageNumber: number) => {
+    if (pageByNumber.has(pageNumber)) selected.add(pageNumber);
+  };
+  const total = pages.length;
+  pages.slice(0, Math.min(6, total)).forEach((page) => addPage(Number(page.page_number)));
+  pages.slice(Math.max(0, total - 2)).forEach((page) => addPage(Number(page.page_number)));
+
+  for (const item of scored) {
+    if (item.score >= 6) {
+      addPage(item.page_number);
+      addPage(item.page_number - 1);
+      addPage(item.page_number + 1);
+    } else if (item.score >= 3) {
+      addPage(item.page_number);
+    }
+  }
+
+  const minimumSelected = Math.min(total, 35);
+  if (selected.size < minimumSelected) {
+    scored
+      .slice()
+      .sort((a, b) => b.score - a.score)
+      .slice(0, minimumSelected)
+      .forEach((item) => addPage(item.page_number));
+  }
+
+  const selectedPages = Array.from(selected)
+    .sort((a, b) => a - b)
+    .map((pageNumber) => pageByNumber.get(pageNumber)!)
+    .filter(Boolean);
+  const selectedSet = new Set(selectedPages.map((page) => Number(page.page_number)));
+  return {
+    selectedPages,
+    skippedPages: pages.map((page) => Number(page.page_number)).filter((pageNumber) => !selectedSet.has(pageNumber)),
+    pageScores: scored,
+  };
+}
+
+function getTenderExtractionMode() {
+  const mode = String(process.env.TENDER_EXTRACTION_MODE || "economy").trim().toLowerCase();
+  return mode === "deep" ? "deep" : "economy";
+}
+
+function getTenderEconomyModels() {
+  const models = [
+    process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-flash-lite",
+  ];
+  if (process.env.TENDER_USE_PRO_FALLBACK === "true") {
+    models.push(process.env.TENDER_DEEP_EXTRACTION_MODEL || "gemini-3.1-pro-preview");
+  }
+  models.push("gemini-3.5-flash");
+  return Array.from(new Set(models.filter(Boolean)));
+}
+
+function getTenderDeepModels() {
+  return Array.from(new Set([
+    process.env.TENDER_DEEP_EXTRACTION_MODEL || process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview",
+    process.env.TENDER_EXTRACTION_MODEL || "gemini-3.5-flash",
+    "gemini-3.5-flash",
+  ].filter(Boolean)));
+}
+
+function buildEconomyTenderPrompt(tenderText: string, chunkNote = "") {
+  return `You are an ultra-aggressive, highly analytical, and extremely detail-oriented ultimate tender document extraction AI.
+The user may have provided MULTIPLE documents for a single tender concatenated together (for example: Primary Tender + Scope/TOR + Addenda + CV response examples).
+Your goal is to parse the provided tender document(s) line-by-line, leaving no word unread.
+You MUST consolidate the extracted roles, staffing positions, requirements, metrics, scores, and project details from ALL uploaded documents into a single cohesive tender object with 100% accuracy. Do not summarize or ignore details.
+${chunkNote}
+
+MANDATORY FIELD RECONNAISSANCE BEFORE EXTRACTION:
+Before producing JSON, silently identify where each tender field is likely located. Look for these sections and tables across the whole supplied text:
+- cover page, request/proposal letter, data sheet, procurement data sheet, invitation, RFP reference, submission deadline, client, country, project title, project duration
+- evaluation criteria, technical score tables, key expert points, pass/fail requirements, staff scoring tables
+- terms of reference, scope of services, objectives, activities, tasks, deliverables, outputs, reporting requirements
+- team composition, key experts, non-key experts, professional staff, proposed senior personnel, personnel schedule, staff input, man-month/person-month/input tables
+- qualification and experience tables, minimum qualifications, education, registrations, chartership, practising certificates, licences, memberships
+- role descriptions, duties, responsibilities, functions, assignment activities, similar project requirements, local/international/regional/country experience
+- language, software, methodology, safeguard, standards, tools, certifications, nationality, residency, and location requirements
+
+COMMON TENDER STRUCTURES YOU MUST UNDERSTAND:
+- PPDA/RFP documents can contain long instruction/contract boilerplate before the real expert details. The real role data may be in Evaluation Criteria, Technical Proposal forms, Outline of Key Experts, Professional Staff, or TOR pages.
+- World Bank-style RFPs can define "Key Experts" early as boilerplate, but real positions are usually in the Data Sheet, Evaluation Criteria, Team Composition, Terms of Reference, or Appendix B Key Experts.
+- TOR-only documents often put role requirements in prose, for example "Hydraulic engineer/Modeler: The expert should have..." rather than in a table.
+- Oman-style documents may use compact staff tables listing role name, unit, and months, with separate evaluation or TOR pages giving qualifications and duties.
+- A table may continue on later pages without repeating headers. Carry the last staff-table header meanings forward until the table clearly ends.
+
+CRITICAL INSTRUCTIONS (AGGRESSIVE EXTRACTION):
+1. EXHAUSTIVE COMPREHENSIVE EXTRACTION: Do not skim. Read every single line across all documents. Capture every specific certification, language proficiency, local or international experience requirement, duration, input month, score, deadline, licence, registration, membership, methodology, safeguard, standard, software, and location mentioned.
+2. DEEP POSITION ANALYSIS & CONSOLIDATION: For each staffing position, rigorously map out role_description, general_experience, specific_experience, minimum_education, minimum_years_experience, required_sector_experience, required_keywords, mandatory_skills, required_software, required_certifications, professional_memberships, required_languages, nationality_preference, work_location, input_months, minimum_similar_projects, and evaluation_points. You MUST extract the verbatim text for the experience and education requirements. Do not leave general_experience, specific_experience, or role_description blank when relevant wording exists anywhere in the supplied tender text.
+3. CAPTURE IMPLICIT & HIDDEN REQUIREMENTS FROM THE DOCUMENT: Read between the lines of the tender text. Identify exact technologies, methodologies, safeguards, standards, certifications, licences, software, frameworks, and project-sector requirements when they appear in the document or are clearly tied to the written scope/TOR. Do not add facts from outside the supplied tender documents.
+4. NO DATA LEFT BEHIND: Think about how this data will be used to perfectly match and tailor CVs. Ensure scope_summary and special_requirements are extremely detailed and rich in context.
+5. TEAM-LEVEL CONSTRAINTS: Look for any rules that affect the whole team rather than a single position (for example: "The team must have at least one local citizen", "One member must be a certified auditor", "All personnel must be fluent in English", "registered in Uganda"). Extract these into global_team_constraints unless they clearly apply to only one role.
+6. EXHAUSTIVE TENDER TYPE EXTRACTION: In project_sector, pick EVERYTHING the job is related to (for example: Infrastructure, Roads, Bridges, Construction, Railway, Water, Sanitation, Flood Protection, Feasibility Study, Design Review, Construction Supervision). Be generous and comprehensive.
+7. MULTI-DOCUMENT CONSOLIDATION: If roles appear in one document and details appear in another, merge them. If evaluation criteria names a role and TOR gives duties, combine them into one complete position.
+8. ROLE TITLE CLEANING: A label such as "K-1 Team Leader", "Position K2 Railway Engineer", "1 Resident Engineer", or "Assistant Resident Engineer (2No)" must produce a clean position_title such as "Team Leader", "Railway Engineer", "Resident Engineer", or "Assistant Resident Engineer"; put K numbers, quantities, and notes into the correct fields.
+9. REAL ROLES ONLY: A real role is a required person/expert/staff position. Do not create positions from generic clause headings such as eligibility documents, obligations of consultant, institution of professional engineer, consultant risks, proposal forms, fraud clauses, signatures, or contract boilerplate.
+10. VERBATIM REQUIREMENT PRESERVATION: Keep tender wording as much as possible after OCR cleanup. Fix split words, broken line wraps, repeated headers/footers, and noisy symbols, but preserve meaning and strictness.
+11. EVIDENCE: For each extracted role and populated role field, include source_page_numbers, source_quotes, and field_evidence when page markers or source wording are available.
+
+FIELD DEFINITIONS:
+- position_title: clean occupational role only, such as Resident Engineer, Team Leader, Materials Engineer, Environmental Specialist.
+- quantity: number of people required for that role only.
+- input_months: staff effort/months/person-months for that role only.
+- work_location: place of assignment for that role only.
+- nationality_preference: explicit nationality/citizenship requirement only.
+- minimum_education: degrees, disciplines, academic qualifications, professional registration, licences, chartership, practising certificate, or required membership when written as a qualification.
+- minimum_years_experience: the broad overall years requirement for the role.
+- general_experience: broad overall professional experience wording, including total years and seniority requirements.
+- specific_experience: role, project, sector, country, task, or similar-assignment experience wording.
+- role_description: duties, tasks, responsibilities, functions, activities, services, outputs, or scope assigned to the role. If duties are only in the general TOR scope and clearly apply to the team, start with "Not separately stated for this role; responsibilities derive from TOR scope:".
+- role_duties_status: explicit when duties are directly stated for the role, tor_scope when duties only come from general TOR scope, not_stated when searched and not present, needs_review when uncertain.
+- required_sector_experience: named sector/domain experience such as roads, bridges, railway, water, buildings, transport planning, geotechnical, hydrology.
+- mandatory_skills: explicit non-software abilities or competencies only.
+- required_software: named software/tools only, such as AutoCAD, Primavera, MS Project, GIS, BIM.
+- required_certifications: licences, professional registration, chartership, permits, certificates.
+- professional_memberships: memberships in professional bodies or institutions.
+- required_languages: explicit language and proficiency requirements only.
+- regional_experience: regional or multi-country experience requirements.
+- country_experience: named-country experience requirements.
+- minimum_similar_projects: stated number of similar projects/assignments.
+- evaluation_points: scoring points only, not quantity, years, months, or page numbers.
+- tender-level fields: tender_title, client, country, tender_number, deadline, duration, submission_type, tender_format, scope_summary, project_sector, objectives, deliverables, eligibility_requirements, evaluation_criteria, special_requirements, global_team_constraints.
+
+TABLE READING RULES:
+1. Tables may continue on the next page without repeating headers. Carry the last staff-table header meanings forward until the table clearly ends.
+2. Map row cells by the column meaning, not by position in the text dump. For example, a column headed "Qualifications" belongs to minimum_education; "Experience" belongs to general_experience/specific_experience; "Inputs", "Time Input", "Man-months", or "Person-months" belongs to input_months.
+3. If role names are listed in one table and detailed requirements appear later, merge them into one complete position.
+4. If a row says "Project Manager/Team Leader 1.0 ... 55.0", role is Project Manager/Team Leader and input_months is 55.0. Do not put numeric month values into title or experience.
+5. If a row says "Resident Engineer: One" or "Assistant Resident Engineer (2No)", quantity is 1 or 2.
+
+Return only valid JSON matching the schema.
+
+Tender Text:
+${tenderText}`;
+}
+
+async function runParseTenderTextEconomy(
+  text: string,
+  sourcePageTexts: Array<{ page_number: number; text: string }> = [],
+): Promise<any> {
+  const models = getTenderEconomyModels();
+  const parseTenderWithPrompt = async (promptText: string) => {
+    const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({
+      model: modelName,
+      contents: [{ role: "user", parts: [{ text: promptText }] }],
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: tenderSchema,
+        temperature: 0.1,
+      },
+    }), models);
+    return sanitizeExtractedValues(parseGenAIJSON(response.text || "{}"));
+  };
+
+  const chunks = prepareTenderPromptChunks(text);
+  const concurrency = Math.max(1, Number(process.env.TENDER_EXTRACTION_CONCURRENCY || 1));
+  const results = await mapWithConcurrency(
+    chunks,
+    concurrency,
+    (chunk, index) => parseTenderWithPrompt(buildEconomyTenderPrompt(
+      chunk,
+      chunks.length > 1
+        ? `This is chunk ${index + 1} of ${chunks.length}. Extract all facts visible in this selected tender text chunk; another step will merge chunks.`
+        : "",
+    )),
+  );
+  const fulfilled = results
+    .filter((result): result is PromiseFulfilledResult<any> => result.status === "fulfilled")
+    .map((result) => result.value);
+  if (!fulfilled.length) {
+    const failedReason = results.find((result) => result.status === "rejected") as PromiseRejectedResult | undefined;
+    throw new Error(`Tender extraction failed: ${failedReason?.reason?.message || "No AI extraction result returned."}`);
+  }
+
+  let tender = postProcessTenderExtraction(mergeTenderExtractions(fulfilled), text);
+  if (sourcePageTexts.length) tender = reconcileTenderEvidencePages(tender, sourcePageTexts);
+  tender = normalizeTenderRecord(tender);
+  const validation = validateExtractedTender(tender);
+  logExtractionValidation("TENDER", tender.tender_title || tender.name || "Economy tender extraction", validation);
+  const failedChunks = results.filter((result) => result.status === "rejected").length;
+  tender.extraction_warnings = Array.from(new Set([
+    ...(tender.extraction_warnings || []),
+    ...validation.issues,
+    ...(failedChunks ? [`${failedChunks} tender text chunk(s) failed and should be reviewed.`] : []),
+  ]));
+  tender.review_required = tender.review_required || tender.extraction_warnings.length > 0;
+  tender.extraction_audit = {
+    ...(tender.extraction_audit || {}),
+    pipeline: "economy-text-layer + flash-line-by-line-extraction + merge + deterministic-post-process + validation",
+    mode: "economy",
+    model: models[0],
+    chunkCount: chunks.length,
+    failedChunks,
+    validationIssues: validation.issues,
+    proFallbackEnabled: process.env.TENDER_USE_PRO_FALLBACK === "true",
+    extractedAt: new Date().toISOString(),
+  };
+  return sanitizeExtractedValues(tender);
+}
+
 async function repairTenderRolesFromFullDocumentContext(
   currentTender: any,
   rawTenderText: string,
@@ -1372,6 +1633,10 @@ ${JSON.stringify(roleContexts, null, 2)}`;
 }
 
 export async function runParseTenderText(text: string): Promise<any> {
+  if (getTenderExtractionMode() !== "deep") {
+    return runParseTenderTextEconomy(text);
+  }
+
   const promptTenderText = prepareTenderPromptText(text);
   const buildTenderPrompt = (tenderText: string, chunkNote = "") => `You are a 100% aggressive senior tender analyst and procurement extraction specialist.
   Your job is to READ, UNDERSTAND, CROSS-CHECK, and EXTRACT every tender requirement needed by this application. Do not behave like a keyword matcher. Treat the document as a real tender that may use any format, wording, table layout, annex style, or role naming convention.
@@ -1503,7 +1768,7 @@ export async function runParseTenderText(text: string): Promise<any> {
     const repairResults = await mapWithConcurrency(
       repairPrompts,
       Number(process.env.TENDER_EXTRACTION_CONCURRENCY || 3),
-      (repairPrompt) => parseTenderWithPrompt(repairPrompt, ["gemini-3.1-pro-preview", "gemini-3.5-flash"]),
+      (repairPrompt) => parseTenderWithPrompt(repairPrompt, getTenderDeepModels()),
     );
     repairResults.forEach((result) => {
       if (result.status === "fulfilled") repairedTenderPieces.push(result.value);
@@ -1516,7 +1781,7 @@ export async function runParseTenderText(text: string): Promise<any> {
   const chunks = prepareTenderPromptChunks(text);
   let parsed: any;
   if (chunks.length > 1) {
-    const longTenderModels = [process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview", "gemini-3.5-flash"];
+    const longTenderModels = getTenderDeepModels();
     const concurrency = Number(process.env.TENDER_EXTRACTION_CONCURRENCY || 3);
     const roleOnlyResults = await mapWithConcurrency(
       chunks,
@@ -1545,7 +1810,7 @@ export async function runParseTenderText(text: string): Promise<any> {
       .map((result) => result.value);
     parsed = fulfilled.length ? mergeTenderExtractions(fulfilled) : await parseTenderWithPrompt(prompt, longTenderModels);
   } else {
-    const models = [process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview", "gemini-3.5-flash"];
+    const models = getTenderDeepModels();
     const [rolesOnly, fullExtraction] = await Promise.allSettled([
       parseTenderWithPrompt(buildRolesOnlyPrompt(promptTenderText), models),
       parseTenderWithPrompt(prompt, models),
@@ -1568,7 +1833,7 @@ export async function runParseTenderText(text: string): Promise<any> {
   
   BE EXTREMELY AGGRESSIVE. EXTRACT EVERY DETAIL POSSIBLE, EVEN IF IT FEELS OVERWHELMING. DO NOT SUMMARIZE. DO NOT LEAVE ANY VALID REQUIREMENT UNEXTRACTED.`;
     try {
-      const retryParsed = await parseTenderWithPrompt(retryPrompt, ["gemini-3.1-pro-preview"]);
+      const retryParsed = await parseTenderWithPrompt(retryPrompt, getTenderDeepModels());
       const retryTender = postProcessTenderExtraction(retryParsed, text);
       const retryValidation = validateExtractedTender(retryTender);
       logExtractionValidation("TENDER", retryTender.tender_title || retryTender.name || "Retried tender", retryValidation);
@@ -1585,18 +1850,27 @@ export async function runParseTenderText(text: string): Promise<any> {
   tender = await auditTenderExtractionWithAI(
     tender,
     text,
-    [process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview", "gemini-3.5-flash"],
+    getTenderDeepModels(),
   );
   const finalizedTextExtraction = await finalizeTenderExtraction(
     [tender],
-    [process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview", "gemini-3.5-flash"],
+    getTenderDeepModels(),
   );
   const finalTender = normalizeTenderRecord(finalizedTextExtraction);
   if (finalTender.positions.length !== finalizedTextExtraction.positions.length) {
-    throw new Error("Final tender synthesis returned duplicate or invalid personnel positions. The extraction was rejected.");
+    finalTender.extraction_warnings = Array.from(new Set([
+      ...(finalTender.extraction_warnings || []),
+      `Final synthesis returned ${finalizedTextExtraction.positions.length} position records; validation kept ${finalTender.positions.length} distinct valid role(s). Review the cleaned position list.`,
+    ]));
+    finalTender.review_required = true;
   }
   if (Array.isArray(finalTender.extraction_blocking_issues) && finalTender.extraction_blocking_issues.length > 0) {
-    throw new Error(`Final tender synthesis failed completeness validation: ${finalTender.extraction_blocking_issues.join(" ")}`);
+    finalTender.extraction_warnings = Array.from(new Set([
+      ...(finalTender.extraction_warnings || []),
+      ...finalTender.extraction_blocking_issues.map((issue: string) => `Review required: ${issue}`),
+    ]));
+    finalTender.extraction_blocking_issues = [];
+    finalTender.review_required = true;
   }
   tender = finalTender;
   validation = validateExtractedTender(tender);
@@ -2235,8 +2509,8 @@ ${JSON.stringify(finalized)}
 Rebuild the final tender object from the candidate extraction. Correct every field-placement problem. Preserve field_evidence from the source fragments for every populated field. In particular, position_title must contain only the clean occupational role and never K-1, numbering, quantity, qualification, experience, or duties. Return only the corrected schema-valid JSON.`));
     semanticIssues = validateTenderFieldSemantics(finalized);
   }
-  if (!Array.isArray(finalized?.positions) || finalized.positions.length === 0 || semanticIssues.length > 0) {
-    throw new Error(`Final tender synthesis failed semantic field validation: ${semanticIssues.join(" ") || "No personnel positions returned."}`);
+  if (!Array.isArray(finalized?.positions) || finalized.positions.length === 0) {
+    throw new Error("Final tender synthesis did not return any valid personnel positions.");
   }
 
   return {
@@ -2244,6 +2518,12 @@ Rebuild the final tender object from the candidate extraction. Correct every fie
     ...finalized,
     positions: finalized.positions,
     page_classifications: candidate.page_classifications,
+    extraction_warnings: Array.from(new Set([
+      ...(candidate.extraction_warnings || []),
+      ...(finalized.extraction_warnings || []),
+      ...semanticIssues.map((issue) => `Review required: ${issue}`),
+    ])),
+    review_required: Boolean(candidate.review_required || finalized.review_required || semanticIssues.length > 0),
     tender_field_evidence: Array.isArray(finalized.tender_field_evidence) && finalized.tender_field_evidence.length
       ? finalized.tender_field_evidence
       : candidate.tender_field_evidence,
@@ -2282,24 +2562,47 @@ export async function runParseTenderPdfFiles(files: TenderPdfInput[]): Promise<a
         await parser?.destroy().catch(() => undefined);
       }
 
-      const segmentStep = Math.max(1, segmentSize - 2);
-      for (let start = 0; start < filePages; start += segmentStep) {
-        const end = Math.min(filePages, start + segmentSize);
-        const segmentPdf = await PDFDocument.create();
-        const copiedPages = await segmentPdf.copyPages(sourcePdf, Array.from({ length: end - start }, (_, index) => start + index));
-        copiedPages.forEach((page) => segmentPdf.addPage(page));
-        const segmentPath = path.join(tempDir, `segment-${segments.length + 1}.pdf`);
-        await fs.writeFile(segmentPath, await segmentPdf.save());
-        segments.push({
-          path: segmentPath,
-          fileName: file.originalname,
-          firstPage: documentPageOffset + start + 1,
-          lastPage: documentPageOffset + end,
-        });
+      if (getTenderExtractionMode() === "deep") {
+        const segmentStep = Math.max(1, segmentSize - 2);
+        for (let start = 0; start < filePages; start += segmentStep) {
+          const end = Math.min(filePages, start + segmentSize);
+          const segmentPdf = await PDFDocument.create();
+          const copiedPages = await segmentPdf.copyPages(sourcePdf, Array.from({ length: end - start }, (_, index) => start + index));
+          copiedPages.forEach((page) => segmentPdf.addPage(page));
+          const segmentPath = path.join(tempDir, `segment-${segments.length + 1}.pdf`);
+          await fs.writeFile(segmentPath, await segmentPdf.save());
+          segments.push({
+            path: segmentPath,
+            fileName: file.originalname,
+            firstPage: documentPageOffset + start + 1,
+            lastPage: documentPageOffset + end,
+          });
+        }
       }
     }
 
-    const modelNames = [process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview", "gemini-3.5-flash"];
+    if (getTenderExtractionMode() !== "deep") {
+      const pageSelection = selectEconomyTenderPageTexts(sourcePageTexts);
+      const tenderText = sourcePageTextsToTenderText(pageSelection.selectedPages);
+      if (tenderText.replace(/--- PAGE \d+ ---/g, "").trim().length >= 1000) {
+        const tender = await runParseTenderTextEconomy(tenderText, sourcePageTexts);
+        tender.extraction_audit = {
+          ...(tender.extraction_audit || {}),
+          source: "pdf_text_layer_filtered",
+          totalPages,
+          pagesSentToAI: pageSelection.selectedPages.length,
+          pagesSkippedBeforeAI: pageSelection.skippedPages.length,
+          skippedPageNumbers: pageSelection.skippedPages.slice(0, 200),
+          pageFilterReductionPercent: totalPages ? Math.round((pageSelection.skippedPages.length / totalPages) * 100) : 0,
+          segmentSize: null,
+          segmentCount: 0,
+        };
+        return tender;
+      }
+      console.warn("[Tender extraction] Economy mode could not find enough PDF text-layer content; falling back to deep PDF vision extraction.");
+    }
+
+    const modelNames = getTenderDeepModels();
     const classificationModels = [process.env.TENDER_CLASSIFICATION_MODEL || "gemini-3.5-flash", modelNames[0]];
     const deterministicTableContexts = inferTenderTableContextsFromText(sourcePageTexts);
     const aiTableContexts = await extractTenderTableContexts(sourcePageTexts, classificationModels);
@@ -2574,10 +2877,19 @@ Attach field_evidence to every populated field. Keep roles separate by lot, posi
     const finalizedExtraction = await finalizeTenderExtraction([auditedExtraction], modelNames);
     const tender = normalizeTenderRecord(reconcileTenderEvidencePages(finalizedExtraction, sourcePageTexts));
     if (tender.positions.length !== finalizedExtraction.positions.length) {
-      throw new Error(`Final tender synthesis returned ${finalizedExtraction.positions.length} position records, but validation found only ${tender.positions.length} distinct valid roles. The extraction was rejected instead of silently correcting duplicate or invalid positions.`);
+      tender.extraction_warnings = Array.from(new Set([
+        ...(tender.extraction_warnings || []),
+        `Final synthesis returned ${finalizedExtraction.positions.length} position records; validation kept ${tender.positions.length} distinct valid role(s). Review the cleaned position list.`,
+      ]));
+      tender.review_required = true;
     }
     if (Array.isArray(tender.extraction_blocking_issues) && tender.extraction_blocking_issues.length > 0) {
-      throw new Error(`Final tender synthesis failed completeness validation: ${tender.extraction_blocking_issues.join(" ")}`);
+      tender.extraction_warnings = Array.from(new Set([
+        ...(tender.extraction_warnings || []),
+        ...tender.extraction_blocking_issues.map((issue: string) => `Review required: ${issue}`),
+      ]));
+      tender.extraction_blocking_issues = [];
+      tender.review_required = true;
     }
     const classifiedPageNumbers = new Set((tender.page_classifications || []).map((item: any) => Number(item.page_number)));
     const missingPageClassifications = Array.from({ length: totalPages }, (_, index) => index + 1).filter((page) => !classifiedPageNumbers.has(page));
