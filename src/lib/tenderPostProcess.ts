@@ -141,14 +141,17 @@ function cleanTenderEducationRequirement(value: any) {
   if (/^\d{1,2}$/.test(text)) return "";
   if (!text) return "";
 
-  const academicCandidate = text
-    .split(/\b(?:registered\/chartered|registered|chartered|valid\s+practi[cs]ing|professional\s+(?:registration|membership|body|institution|association)|membership|licen[cs]e|certificate)\b/i)[0]
-    .split(/\b(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen)\s*(?:\(\d{1,2}\)\s*)?years?\b/i)[0]
-    .replace(/\s*(?:;|,|-|and)\s*$/i, "")
-    .trim();
-
-  if (looksLikeAcademicEducation(academicCandidate)) return academicCandidate;
-  if (looksLikeAcademicEducation(text) && !looksLikeProfessionalRegistration(text)) return text;
+  // Keep the full AI-extracted education text. The AI prompt already separates
+  // education from certifications. Only return empty if the text has absolutely
+  // no education-relevant content at all.
+  if (looksLikeAcademicEducation(text)) return text;
+  // Also keep text that mentions professional qualifications as education context
+  // (e.g. "Professionally qualified in Civil Engineering" or "Higher National Certificate")
+  if (/\b(?:qualified|qualification|certificate|certif|hnd|hnc|nvq|ond|postgraduate|post graduate|higher national|national higher|professionally)\b/i.test(text)) return text;
+  // If the text has experience-like content but no education markers, it's not education
+  if (/\b(?:years?|experience|similar\s+(?:projects?|assignments?))\b/i.test(text) && !looksLikeAcademicEducation(text)) return "";
+  // Preserve any remaining non-trivial text — the AI deemed it education
+  if (text.length > 10) return text;
   return "";
 }
 
