@@ -3,6 +3,14 @@ import { useTasks } from '../lib/TasksContext';
 import { Loader2, CheckCircle2, XCircle, X } from 'lucide-react';
 import clsx from 'clsx';
 
+function formatEta(seconds: number) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "calculating";
+  if (seconds < 60) return `~${Math.ceil(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remaining = Math.ceil(seconds % 60);
+  return remaining ? `~${minutes}m ${remaining}s` : `~${minutes}m`;
+}
+
 export default function TasksOverlay() {
   const { tasks, removeTask } = useTasks();
 
@@ -44,7 +52,7 @@ export default function TasksOverlay() {
                   task.status === 'running' ? "text-blue-600" :
                   task.status === 'completed' ? "text-green-500" : "text-red-500"
                 )}>
-                  {task.status === 'running' ? `ETA: ~${task.eta}s` : task.status}
+                  {task.status === 'running' ? `ETA: ${formatEta(task.eta)}` : task.status}
                 </span>
               </div>
             </div>

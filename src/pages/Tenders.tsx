@@ -42,6 +42,24 @@ const isCloseToDeadline = (deadlineStr: string) => {
   return diffDays >= 0 && diffDays <= 7;
 };
 
+const estimateTenderParsingSeconds = (files: File[]) => {
+  const totalMb = files.reduce((sum, file) => sum + file.size / (1024 * 1024), 0);
+  const pdfCount = files.filter((file) => file.name.toLowerCase().endsWith(".pdf")).length;
+  const base = 25;
+  const fileCost = files.length * 12;
+  const sizeCost = totalMb * 2.5;
+  const pdfCost = pdfCount * 18;
+  return Math.max(45, Math.ceil(base + fileCost + sizeCost + pdfCost));
+};
+
+const formatEtaMessage = (seconds: number) => {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "Calculating...";
+  if (seconds < 60) return `~${Math.ceil(seconds)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remaining = Math.ceil(seconds % 60);
+  return remaining ? `~${minutes}m ${remaining}s` : `~${minutes}m`;
+};
+
 export default function Tenders() {
   const { isAdmin } = useAuth();
   const navigate = useNavigate();
@@ -353,25 +371,41 @@ export default function Tenders() {
           : "Extracting text from tender document...",
     });
 
-    let currentEta = 45;
-    let currentPercent = 5;
+    const estimatedSeconds = estimateTenderParsingSeconds(fileList);
+    const startedAt = Date.now();
+    const allPdf = fileList.every((file) => file.name.toLowerCase().endsWith('.pdf'));
+    const progressStages = [
+      { at: 0.15, text: "Extracting text from uploaded document pages..." },
+      { at: 0.38, text: "Selecting relevant tender, TOR, staffing, and evaluation pages..." },
+      { at: 0.62, text: "AI is extracting tender fields and personnel requirements..." },
+      { at: 0.82, text: "Merging roles, tables, duties, and qualification requirements..." },
+      { at: 0.92, text: "Preparing human verification review..." },
+    ];
+    let lastStageIndex = -1;
     const interval = setInterval(() => {
-      currentPercent = Math.min(currentPercent + Math.random() * 10, 95);
-      currentEta = Math.max(currentEta - 3, 2);
+      const elapsedSeconds = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
+      const ratio = elapsedSeconds / estimatedSeconds;
+      const percent = Math.min(92, Math.max(5, Math.round(ratio * 90)));
+      const eta = Math.max(8, Math.ceil(estimatedSeconds - elapsedSeconds));
+      const stageIndex = progressStages.reduce((current, stage, index) => (ratio >= stage.at ? index : current), 0);
+      const stageMessage = progressStages[stageIndex]?.text;
+      if (stageIndex !== lastStageIndex) lastStageIndex = stageIndex;
       updateTask(taskId, {
-        percent: currentPercent,
-        eta: currentEta,
+        percent,
+        eta,
+        ...(stageMessage ? { message: stageMessage } : {}),
       });
     }, 1500);
 
     try {
       updateTask(taskId, {
+        percent: 5,
+        eta: estimatedSeconds,
         message:
           fileList.length > 1
-            ? `Native PDF analysis: reading every page across ${fileList.length} documents...`
-            : "Native PDF analysis: reading text, tables, layout, and scanned pages...",
+            ? `Reading ${fileList.length} document(s). Estimated ${formatEtaMessage(estimatedSeconds)}.`
+            : `Reading tender document. Estimated ${formatEtaMessage(estimatedSeconds)}.`,
       });
-      const allPdf = fileList.every((file) => file.name.toLowerCase().endsWith('.pdf'));
       let parsedTender: any;
       if (allPdf) {
         parsedTender = await parseTenderPdfFiles(fileList);

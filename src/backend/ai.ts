@@ -1331,12 +1331,12 @@ function getTenderExtractionMode() {
 
 function getTenderEconomyModels() {
   const models = [
-    process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-flash-lite",
+    process.env.TENDER_EXTRACTION_MODEL || "gemini-3.5-flash",
   ];
   if (process.env.TENDER_USE_PRO_FALLBACK === "true") {
     models.push(process.env.TENDER_DEEP_EXTRACTION_MODEL || "gemini-3.1-pro-preview");
   }
-  models.push("gemini-3.5-flash");
+  models.push("gemini-3.1-pro-preview");
   return Array.from(new Set(models.filter(Boolean)));
 }
 
@@ -1350,7 +1350,8 @@ function getTenderDeepModels() {
 
 function buildEconomyTenderPrompt(tenderText: string, chunkNote = "") {
   return `You are an ultra-aggressive, highly analytical, and extremely detail-oriented ultimate tender document extraction AI.
-The user may have provided MULTIPLE documents for a single tender concatenated together (for example: Primary Tender + Scope/TOR + Addenda + CV response examples).
+The user may have provided MULTIPLE documents for a single tender concatenated together (for example: Primary Tender + Scope/TOR + Addenda, and sometimes previous CV response examples).
+READ INTELLIGENTLY LINE BY LINE: Tenders can be 200+ pages long with many irrelevant words. You must be smart enough to know what is necessary (roles, skills, deadlines, constraints) and what is not (boilerplates, standard contract clauses, filler text). Focus entirely on the concrete requirements.
 Your goal is to parse the provided tender document(s) line-by-line, leaving no word unread.
 You MUST consolidate the extracted roles, staffing positions, requirements, metrics, scores, and project details from ALL uploaded documents into a single cohesive tender object with 100% accuracy. Do not summarize or ignore details.
 ${chunkNote}
@@ -1364,6 +1365,7 @@ Before producing JSON, silently identify where each tender field is likely locat
 - qualification and experience tables, minimum qualifications, education, registrations, chartership, practising certificates, licences, memberships
 - role descriptions, duties, responsibilities, functions, assignment activities, similar project requirements, local/international/regional/country experience
 - language, software, methodology, safeguard, standards, tools, certifications, nationality, residency, and location requirements
+- if CV response/example documents are present, recognise them as response material; use them only to understand which tender role they were responding to, and never copy candidate education, candidate years, candidate employers, candidate projects, or adequacy text as tender requirements
 
 COMMON TENDER STRUCTURES YOU MUST UNDERSTAND:
 - PPDA/RFP documents can contain long instruction/contract boilerplate before the real expert details. The real role data may be in Evaluation Criteria, Technical Proposal forms, Outline of Key Experts, Professional Staff, or TOR pages.
@@ -1371,6 +1373,7 @@ COMMON TENDER STRUCTURES YOU MUST UNDERSTAND:
 - TOR-only documents often put role requirements in prose, for example "Hydraulic engineer/Modeler: The expert should have..." rather than in a table.
 - Oman-style documents may use compact staff tables listing role name, unit, and months, with separate evaluation or TOR pages giving qualifications and duties.
 - A table may continue on later pages without repeating headers. Carry the last staff-table header meanings forward until the table clearly ends.
+- CV response documents often contain headings like "CURRICULUM VITAE", "POSITION TITLE", "EDUCATION", "EMPLOYMENT RECORD", and "ADEQUACY FOR THE ASSIGNMENT". These are not tender requirements unless the same requirement is supported by the tender/TOR/evaluation text.
 
 CRITICAL INSTRUCTIONS (AGGRESSIVE EXTRACTION):
 1. EXHAUSTIVE COMPREHENSIVE EXTRACTION: Do not skim. Read every single line across all documents. Capture every specific certification, language proficiency, local or international experience requirement, duration, input month, score, deadline, licence, registration, membership, methodology, safeguard, standard, software, and location mentioned.

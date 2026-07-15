@@ -144,11 +144,13 @@ function cleanTenderLocation(value: any) {
 
 function canonicalTenderPositionTitle(value: any) {
   let title = cleanTenderRequirementText(value)
+    .replace(/^\s*the\s+/i, "")
     .replace(/^\s*K\s*[-.]?\s*\d+\s*[:.)-]?\s*/i, "")
     .replace(/\s*\((?:supervision|construction|design update|assistant resident engineer)\)\s*/gi, " ")
-    .replace(/\bfor\s+(?:construction activities|design update)\b/gi, " ")
+    .replace(/\bfor\s+(?:construction activities|design update|design)\b/gi, " ")
     .replace(/\bmaterials?\b/gi, "material")
     .replace(/\bland surveyor\b/gi, "surveyor")
+    .replace(/\bsenior\s+surveyor\b/gi, "surveyor")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -158,9 +160,8 @@ function canonicalTenderPositionTitle(value: any) {
 }
 
 function tenderPositionGroupKey(position: any) {
-  const document = cleanText(position?.source_document).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const lot = cleanText(position?.lot_reference).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  return `${document}|${lot}|${canonicalTenderPositionTitle(position?.position_title || position?.title || position?.role || "")}`;
+  return `${lot}|${canonicalTenderPositionTitle(position?.position_title || position?.title || position?.role || "")}`;
 }
 
 function mergeUniqueValues(current: any, next: any) {
@@ -231,6 +232,55 @@ function cleanTenderSpecificExperience(value: any) {
   return text;
 }
 
+function looksLikeExperienceRequirement(value: any) {
+  const text = cleanTenderRequirementText(value);
+  return /\b(?:years?|experience|post[-\s]?graduate|similar\s+(?:projects?|assignments?)|minimum|at least|not less than)\b/i.test(text);
+}
+
+function deriveGeneralExperience(position: any) {
+  const existing = cleanTenderRequirementText(position?.general_experience || "");
+  if (existing) return existing;
+  const candidates = [
+    position?.specific_experience,
+    position?.minimum_education,
+    position?.role_description,
+    ...(Array.isArray(position?.source_quotes) ? position.source_quotes : []),
+  ].map(cleanTenderRequirementText).filter(Boolean);
+
+  for (const candidate of candidates) {
+    const match = candidate.match(/(?:^|[.;]\s*)((?:should\s+have\s+|shall\s+have\s+|must\s+have\s+|with\s+)?(?:a\s+)?(?:minimum\s+of\s+|at\s+least\s+|not\s+less\s+than\s+)?(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen)\s*(?:\(\d{1,2}\)\s*)?years?['’]?(?:\s*\([^)]*\))?(?:\s+post[-\s]?graduate)?(?:\s+|\s*-\s*)?(?:relevant\s+|general\s+|professional\s+|overall\s+)?experience[^.;]*)/i);
+    if (match?.[1]) return cleanTenderRequirementText(match[1]);
+    const broadSentence = candidate
+      .split(/(?<=[.;])\s+/)
+      .map(cleanTenderRequirementText)
+      .find((sentence) =>
+        /\b(?:minimum|at least|not less than|should have|shall have|must have)?\s*\d{1,2}\s*years?['’]?/i.test(sentence) &&
+        !/^\s*experience\s+as\b/i.test(sentence),
+      );
+    if (broadSentence) return broadSentence;
+  }
+  return "";
+}
+
+function deriveMandatorySkills(position: any) {
+  const existing = toArray(position?.mandatory_skills);
+  const text = [
+    position?.minimum_education,
+    position?.general_experience,
+    position?.specific_experience,
+    position?.role_description,
+    ...(Array.isArray(position?.required_certifications) ? position.required_certifications : []),
+    ...(Array.isArray(position?.professional_memberships) ? position.professional_memberships : []),
+  ].map(cleanTenderRequirementText).filter(Boolean).join(" ");
+  const derived: string[] = [];
+  if (/\bchartered\b/i.test(text)) derived.push("Professionally Chartered");
+  if (/\bregistered\b/i.test(text)) derived.push("Professionally Registered");
+  if (/\bvalid\s+practi[cs]ing\s+(?:certificate|licen[cs]e)\b/i.test(text)) derived.push("Valid practicing certificate");
+  if (/\bprofessional\s+(?:body|institution|association|registration)\b/i.test(text)) derived.push("Professional body registration");
+  if (/\binternational(?:ly)?\s+recogni[sz]ed\s+registration\b/i.test(text)) derived.push("Internationally recognized registration");
+  return mergeUniqueValues(existing, derived);
+}
+
 function cleanTenderTitle(value: any) {
   let title = cleanTenderRequirementText(value)
     .replace(/\bNote:\s*.+$/i, "")
@@ -273,10 +323,17 @@ export function normalizeTenderPosition(position: any, index = 0) {
     ),
   );
   const education = position?.minimum_education || position?.education || "";
-  const generalExperience = position?.general_experience || "";
+  const generalExperience = deriveGeneralExperience(position);
   const specificExperience = position?.specific_experience || "";
   const roleDescription = position?.role_description || position?.description || position?.responsibilities || "";
   const cleanedRoleDescription = cleanTenderRoleDescription(roleDescription);
+  const mandatorySkills = deriveMandatorySkills({
+    ...position,
+    minimum_education: education,
+    general_experience: generalExperience,
+    specific_experience: specificExperience,
+    role_description: roleDescription,
+  });
 
   return {
     ...position,
@@ -297,7 +354,7 @@ export function normalizeTenderPosition(position: any, index = 0) {
     role_description: cleanedRoleDescription,
     role_duties_status: cleanRoleDutiesStatus(position?.role_duties_status, cleanedRoleDescription),
     required_sector_experience: toArray(position?.required_sector_experience),
-    mandatory_skills: toArray(position?.mandatory_skills),
+    mandatory_skills: mandatorySkills,
     required_software: toArray(position?.required_software),
     required_certifications: toArray(position?.required_certifications),
     professional_memberships: toArray(position?.professional_memberships),
@@ -372,6 +429,16 @@ export function isInvalidTenderPositionTitle(value: string) {
   const title = cleanText(value);
   if (!title) return true;
   const wordCount = title.split(/\s+/).filter(Boolean).length;
+  if (/^(?:authorised|authorized)\s+signatory(?:\s+name\s+of\s+consultant)?$/i.test(title)) return true;
+  if (/^name\s+of\s+(?:associated\s+)?consultants?$/i.test(title)) return true;
+  if (/^(?:detailed\s+)?tasks?\s+assigned\s+(?:on|to)\s+consultants?$/i.test(title)) return true;
+  if (/^team\s+of\s+experts?$/i.test(title)) return true;
+  if (/^outline\s+of\s+(?:the\s+)?key\s+experts?$/i.test(title)) return true;
+  if (/^qualifications?\s+for\s+key\s+experts?$/i.test(title)) return true;
+  if (/^technical\/?manager$/i.test(title)) return true;
+  if (/^prepare\s+engineer$/i.test(title)) return true;
+  if (/^(?:position\s+title\s+and\s+no|position\s+title|name\s+of\s+staff|name\s+of\s+senior\s+staff|curriculum\s+vitae|certification|expert'?s\s+contact\s+information)$/i.test(title)) return true;
+  if (/\b(?:authorised signatory|authorized signatory|signature|curriculum vitae|contact information|assigned on consultant|associated consultant|format of curriculum vitae|confirmation of availability)\b/i.test(title)) return true;
   const hasCoreOccupation = /\b(?:manager|engineer|expert|specialist|leader|coordinator|surveyor|inspector|architect|designer|planner|scheduler|advisor|trainer|analyst|officer|supervisor|controller|technician|draftsman|economist|sociologist|environmentalist|hydrologist|geologist|adjudicator)\b/i.test(title);
   const isCredibleConsultantTitle = /\bconsultant\b/i.test(title) && wordCount <= 7 && !/\b(?:the|of the|obligations?|eligibility|qualifications?|documents?|proposal|services?|organization|assumptions?|risks?|institution)\b/i.test(title);
   if (!hasCoreOccupation && !isCredibleConsultantTitle) return true;
@@ -383,6 +450,7 @@ export function isInvalidTenderPositionTitle(value: string) {
   if (/^(?:The Consultant|For the Consultant|Sub-consultant|Consultant\.?\s*The Consultant)$/i.test(title)) return true;
   if (/\b(?:obligations?|eligibility|qualifications?|documents?|proposal forms?|submission sheet|contract clauses?|conditions of contract)\b.*\bconsultant\b/i.test(title)) return true;
   if (/^(?:Name of Expert|For Expert|Description of Key Expert|Replacement of Key Expert|Removal of Expert)$/i.test(title)) return true;
+  if (/^(?:The\s+)?(?:Key\s+)?Expert$/i.test(title)) return true;
   if (/^(?:Instructions to Consultant|Assignments Consultant|Services while the Consultant|Facilities to be provided by the Consultant)$/i.test(title)) return true;
   if (/^(?:Appendix|Appendix\s+[A-Z]|Performance Declaration|Code of Conduct|Countersignature|Payments to the Consultant)/i.test(title)) return true;
   if (/\b(?:mutual rights and obligations|authority of in case|consultant instructing|commencement the consultant|conflict of the consultant|bank\. the consultant|reporting the consultant|forced labor|child labor|taxes and duties|access to project|opportunity requirements|training of the consultant)\b/i.test(title)) return true;
@@ -430,8 +498,8 @@ export function getTenderPositionWarnings(position: any) {
 function hasPositionRequirementDetail(position: any) {
   return Boolean(
     cleanText(position.minimum_education) ||
-    cleanText(position.general_experience) ||
-    cleanText(position.specific_experience) ||
+    looksLikeExperienceRequirement(position.general_experience) ||
+    looksLikeExperienceRequirement(position.specific_experience) ||
     cleanText(position.role_description) ||
     cleanRoleDutiesStatus(position.role_duties_status, position.role_description) === "not_stated" ||
     (Array.isArray(position.required_keywords) && position.required_keywords.length) ||
@@ -439,10 +507,23 @@ function hasPositionRequirementDetail(position: any) {
   );
 }
 
+function hasPlaceholderRequirementDetail(position: any) {
+  const details = [
+    position?.minimum_education,
+    position?.general_experience,
+    position?.specific_experience,
+    position?.role_description,
+  ].map(cleanText).filter(Boolean).join(" ");
+  return /\b(?:using the format below|list all deliverables|expert'?s contact information|certification:\s*i,\s*the undersigned|available to undertake the assignment|misstatement or misrepresentation|proposed additional support staff|qualifications and experience of the proposed|assigned on consultant'?s)\b/i.test(details);
+}
+
 function isInvalidTenderPosition(position: any) {
   const title = cleanText(position?.position_title);
   if (isInvalidTenderPositionTitle(title)) return true;
+  if (/^the\s+/i.test(title) && !position?.source_position_number && !position?.quantity) return true;
+  if (hasPlaceholderRequirementDetail(position)) return true;
   if (/^(?:General Manager|Managing Director|General Manager[-\s].+)$/i.test(title) && !hasPositionRequirementDetail(position)) return true;
+  if (/^(?:Laboratory Technician|Material Technician|Surveyor Assistant|CAD Technician)$/i.test(title) && !looksLikeExperienceRequirement(position?.general_experience) && !looksLikeExperienceRequirement(position?.specific_experience) && !cleanText(position?.minimum_education)) return true;
   return false;
 }
 
