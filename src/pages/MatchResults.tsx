@@ -31,7 +31,8 @@ import {
   RefreshCw,
   CheckCircle2,
   Printer,
-  Zap
+  Zap,
+  Globe
 } from "lucide-react";
 import { Link, useSearchParams } from "react-router-dom";
 import clsx from "clsx";
