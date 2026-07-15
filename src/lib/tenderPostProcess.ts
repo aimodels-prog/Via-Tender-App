@@ -141,10 +141,15 @@ function cleanTenderEducationRequirement(value: any) {
   if (/^\d{1,2}$/.test(text)) return "";
   if (!text) return "";
 
-  // Keep the full AI-extracted education text. The AI prompt already separates
-  // education from certifications. Only return empty if the text has absolutely
-  // no education-relevant content at all.
-  if (looksLikeAcademicEducation(text)) return text;
+  if (looksLikeAcademicEducation(text)) {
+    const academicOnly = text
+      .replace(/\s*(?:;|,|\band\b)?\s*(?:must\s+be\s+|should\s+be\s+|shall\s+be\s+)?(?:a\s+)?(?:qualified\s+and\s+competent\s+)?(?:professionally\s+)?(?:registered|chartered|registered\s*\/\s*chartered)\b[\s\S]*$/i, "")
+      .replace(/\s+(?:with|and)\s+(?:a\s+)?minimum\s+of\s+\d{1,2}\s*years?['â€™]?(?:\s+of)?\s+experience[\s\S]*$/i, "")
+      .replace(/\s+(?:with|and)\s+\d{1,2}\s*years?['â€™]?(?:\s+of)?\s+experience[\s\S]*$/i, "")
+      .replace(/[;,\s]+$/, "")
+      .trim();
+    return academicOnly || text;
+  }
   // Also keep text that mentions professional qualifications as education context
   // (e.g. "Professionally qualified in Civil Engineering" or "Higher National Certificate")
   if (/\b(?:qualified|qualification|certificate|certif|hnd|hnc|nvq|ond|postgraduate|post graduate|higher national|national higher|professionally)\b/i.test(text)) return text;
@@ -181,8 +186,15 @@ function canonicalTenderPositionTitle(value: any) {
   let title = cleanTenderPositionTitle(value)
     .replace(/^\s*the\s+/i, "")
     .replace(/\s*\((?:supervision|construction|design update|assistant resident engineer)\)\s*/gi, " ")
-    .replace(/\bfor\s+(?:construction activities|design update|design)\b/gi, " ")
+    .replace(/\bfor\s+(?:construction activities|design (?:update|review)|design)\b/gi, " ")
     .replace(/\bmaterials?\b/gi, "material")
+    .replace(/\bcad (?:specialists?|technicians?)\b/gi, "cad specialist technician")
+    .replace(/\bsurvey assistants?\b/gi, "surveyor assistant")
+    .replace(/\btechnicians\b/gi, "technician")
+    .replace(/\bassistants\b/gi, "assistant")
+    .replace(/\bspecialists\b/gi, "specialist")
+    .replace(/\binspectors\b/gi, "inspector")
+    .replace(/\bsurveyors\b/gi, "surveyor")
     .replace(/\bland surveyor\b/gi, "surveyor")
     .replace(/\bsenior\s+surveyor\b/gi, "surveyor")
     .replace(/\s+/g, " ")
@@ -338,11 +350,11 @@ function deriveRequiredCertifications(position: any) {
   ].map(cleanTenderRequirementText).filter(Boolean).join(" ");
 
   const derived: string[] = [];
-  const registrationPhrase = text.match(/\bRegistered\/Chartered\s+Engineer\s+with\s+Valid\s+practi[cs]ing\s+certificate\b/i)?.[0];
+  const registrationPhrase = text.match(/\bRegistered\s*\/\s*Cha(?:rtered|ttered)\s+Engineer\s+with\s+(?:a\s+)?Valid\s+practi[cs]ing\s+(?:certificate|licen[cs]e)\b/i)?.[0];
   if (registrationPhrase) derived.push(registrationPhrase);
   else {
-    if (/\bregistered\/chartered\s+engineer\b/i.test(text)) derived.push("Registered/Chartered Engineer");
-    if (/\bvalid\s+practi[cs]ing\s+certificate\b/i.test(text)) derived.push("Valid practicing certificate");
+    if (/\bregistered\s*\/\s*cha(?:rtered|ttered)\s+engineer\b/i.test(text)) derived.push("Registered/Chartered Engineer");
+    if (/\bvalid\s+practi[cs]ing\s+(?:certificate|licen[cs]e)\b/i.test(text)) derived.push("Valid practicing certificate/licence");
   }
   return mergeUniqueValues(existing, derived);
 }
@@ -513,7 +525,7 @@ export function isInvalidTenderPositionTitle(value: string) {
   if (/^prepare\s+engineer$/i.test(title)) return true;
   if (/^(?:position\s+title\s+and\s+no|position\s+title|name\s+of\s+staff|name\s+of\s+senior\s+staff|curriculum\s+vitae|certification|expert'?s\s+contact\s+information)$/i.test(title)) return true;
   if (/\b(?:authorised signatory|authorized signatory|signature|curriculum vitae|contact information|assigned on consultant|associated consultant|format of curriculum vitae|confirmation of availability)\b/i.test(title)) return true;
-  const hasCoreOccupation = /\b(?:manager|engineer|expert|specialist|leader|coordinator|surveyor|inspector|architect|designer|planner|scheduler|advisor|trainer|analyst|officer|supervisor|controller|technician|draftsman|economist|sociologist|environmentalist|hydrologist|geologist|adjudicator)\b/i.test(title);
+  const hasCoreOccupation = /\b(?:managers?|engineers?|experts?|specialists?|leaders?|coordinators?|surveyors?|inspectors?|architects?|designers?|planners?|schedulers?|advisors?|trainers?|analysts?|officers?|assistants?|supervisors?|controllers?|technicians?|draftsmen|economists?|sociologists?|environmentalists?|hydrologists?|geologists?|adjudicators?)\b/i.test(title);
   const isCredibleConsultantTitle = /\bconsultant\b/i.test(title) && wordCount <= 7 && !/\b(?:the|of the|obligations?|eligibility|qualifications?|documents?|proposal|services?|organization|assumptions?|risks?|institution)\b/i.test(title);
   if (!hasCoreOccupation && !isCredibleConsultantTitle) return true;
   if (wordCount > 14 || /[.!?;]/.test(title)) return true;

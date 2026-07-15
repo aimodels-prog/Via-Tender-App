@@ -186,6 +186,53 @@ async function main() {
     throw new Error("Senior Laboratory Technician specific/geographical experience must be retained.");
   }
 
+  const mukonoTenderPath = "C:/Users/Dell/Downloads/TOR 2024.OM.RFP.48.pdf";
+  if (fs.existsSync(mukonoTenderPath)) {
+    const mukonoText = await readPdfText(mukonoTenderPath);
+    const mukonoTender = normalizeTenderRecord({ positions: extractUniversalTenderFacts(mukonoText).positions });
+    const requiredMukonoRoles = [
+      "Senior Highway Design Engineer/Team Leader for Design Update",
+      "Resident Engineer/Team Leader for Construction Activities",
+      "Measurement Engineer",
+      "Materials & Quality Control Engineer",
+      "Hydrologist/Drainage Engineer",
+      "Senior Land Surveyor",
+      "Electrical Engineer",
+      "Contract/Claims Expert",
+      "Senior Laboratory Technician",
+      "Inspector of Works",
+      "Survey Assistants",
+      "Assistant Laboratory Technicians",
+      "CAD Specialists",
+      "Administrative Assistant",
+    ];
+    const mukonoTitles = mukonoTender.positions.map((position: any) => position.position_title);
+    requiredMukonoRoles.forEach((title) => {
+      if (!mukonoTitles.includes(title)) throw new Error(`Mukono tender extraction missed required role: ${title}`);
+    });
+    const highwayLead = mukonoTender.positions.find((position: any) => /Senior Highway Design Engineer/i.test(position.position_title));
+    if (!/Master.*Civil Engineering.*Highways.*Geotechnical Engineering/i.test(highwayLead?.minimum_education || "")) {
+      throw new Error("Mukono K-1 academic education was not extracted correctly.");
+    }
+    if (highwayLead?.minimum_years_experience !== 15) throw new Error("Mukono K-1 15-year requirement was not extracted.");
+    const claimsExpert = mukonoTender.positions.find((position: any) => position.position_title === "Contract/Claims Expert");
+    if (!/BSc Civil Engineering/i.test(claimsExpert?.minimum_education || "")) throw new Error("Mukono Contract/Claims Expert education was missed.");
+    const supportExpectations: Record<string, { quantity: number; inputMonths: number; years: number }> = {
+      "Senior Laboratory Technician": { quantity: 1, inputMonths: 17, years: 10 },
+      "Inspector of Works": { quantity: 2, inputMonths: 39, years: 7 },
+      "Survey Assistants": { quantity: 4, inputMonths: 81, years: 5 },
+      "Assistant Laboratory Technicians": { quantity: 4, inputMonths: 78, years: 3 },
+      "CAD Specialists": { quantity: 2, inputMonths: 14, years: 2 },
+      "Administrative Assistant": { quantity: 1, inputMonths: 18, years: 3 },
+    };
+    Object.entries(supportExpectations).forEach(([title, expected]) => {
+      const position = mukonoTender.positions.find((item: any) => item.position_title === title);
+      if (position?.quantity !== expected.quantity || position?.input_months !== expected.inputMonths || position?.minimum_years_experience !== expected.years) {
+        throw new Error(`Mukono ${title} quantity, input months, or experience was extracted incorrectly.`);
+      }
+    });
+  }
+
   const repeatedTitleTender = mergeTenderExtractions([
     { positions: [{ position_title: "Civil Engineer", source_position_number: 2, lot_reference: "Lot A", work_location: "North", minimum_education: "BSc Civil Engineering" }] },
     { positions: [{ position_title: "Civil Engineer", source_position_number: 2, lot_reference: "Lot B", work_location: "South", minimum_education: "MSc Civil Engineering" }] },
