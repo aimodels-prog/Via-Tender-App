@@ -895,7 +895,9 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
     const title = normalizePositionTitle(position.position_title || position.title || position.role || "");
     if (!title) return;
     const key = tenderPositionIdentityKey(position, title);
-    if (hasAuthoritativeRoleTable && !recovered.some((item: any) => normalizePositionTitle(item.position_title || "").toLowerCase() === title.toLowerCase())) return;
+    if (hasAuthoritativeRoleTable && !recovered.some((item: any) => normalizePositionTitle(item.position_title || "").toLowerCase() === title.toLowerCase())) {
+      if (!isLikelyStaffRoleTitle(title)) return;
+    }
     const current = byTitle.get(key) || {};
     const preferCurrentSource = hasAuthoritativeRoleTable && Boolean(current.recovered_from_text);
     byTitle.set(key, {
@@ -1374,6 +1376,7 @@ COMMON TENDER STRUCTURES YOU MUST UNDERSTAND:
 - Oman-style documents may use compact staff tables listing role name, unit, and months, with separate evaluation or TOR pages giving qualifications and duties.
 - A table may continue on later pages without repeating headers. Carry the last staff-table header meanings forward until the table clearly ends.
 - CV response documents often contain headings like "CURRICULUM VITAE", "POSITION TITLE", "EDUCATION", "EMPLOYMENT RECORD", and "ADEQUACY FOR THE ASSIGNMENT". These are not tender requirements unless the same requirement is supported by the tender/TOR/evaluation text.
+- Non-key/support staff and technician roles are real positions when the tender requires them. Extract Senior Laboratory Technician, Laboratory Technician, Assistant Laboratory Technician, Materials Technician, CAD Specialist/Technician, inspectors, survey assistants, and similar staff when they appear in a staff schedule, qualification table, evaluation table, or requirement paragraph.
 
 CRITICAL INSTRUCTIONS (AGGRESSIVE EXTRACTION):
 1. EXHAUSTIVE COMPREHENSIVE EXTRACTION: Do not skim. Read every single line across all documents. Capture every specific certification, language proficiency, local or international experience requirement, duration, input month, score, deadline, licence, registration, membership, methodology, safeguard, standard, software, and location mentioned.
@@ -1385,6 +1388,7 @@ CRITICAL INSTRUCTIONS (AGGRESSIVE EXTRACTION):
 7. MULTI-DOCUMENT CONSOLIDATION: If roles appear in one document and details appear in another, merge them. If evaluation criteria names a role and TOR gives duties, combine them into one complete position.
 8. ROLE TITLE CLEANING: A label such as "K-1 Team Leader", "Position K2 Railway Engineer", "1 Resident Engineer", or "Assistant Resident Engineer (2No)" must produce a clean position_title such as "Team Leader", "Railway Engineer", "Resident Engineer", or "Assistant Resident Engineer"; put K numbers, quantities, and notes into the correct fields.
 9. REAL ROLES ONLY: A real role is a required person/expert/staff position. Do not create positions from generic clause headings such as eligibility documents, obligations of consultant, institution of professional engineer, consultant risks, proposal forms, fraud clauses, signatures, or contract boilerplate.
+9A. SUPPORT STAFF ARE STILL REAL ROLES: Do not drop technician, inspector, CAD, laboratory, survey assistant, or other non-key/support positions when they have education, experience, quantity, input months, or staff schedule evidence.
 10. VERBATIM REQUIREMENT PRESERVATION: Keep tender wording as much as possible after OCR cleanup. Fix split words, broken line wraps, repeated headers/footers, and noisy symbols, but preserve meaning and strictness.
 11. EVIDENCE: For each extracted role and populated role field, include source_page_numbers, source_quotes, and field_evidence when page markers or source wording are available.
 
@@ -2372,6 +2376,7 @@ REAL TENDER FIELD EXAMPLES:
 - "15 years post-graduate experience..." belongs in general_experience and minimum_years_experience=15. Role/project-specific parts such as "as Design Engineer" or "at least three projects of similar setting" belong in specific_experience / minimum_similar_projects.
 - "Staff Position Qualification" tables mean the first column is position_title and the qualification cell maps into minimum_education / certifications / experience depending on wording.
 - "Resident Engineer: One" means position_title="Resident Engineer" and quantity=1.
+- "Senior Laboratory Technician Higher Diploma (HD) in Civil Engineering or related discipline with minimum of 10years' experience in similar position on civil and construction projects. Experience in similar geographical conditions, ideally in Uganda is added advantage" means position_title="Senior Laboratory Technician", minimum_education="Higher Diploma (HD) in Civil Engineering or related discipline", minimum_years_experience=10, general_experience includes the 10 years wording, and specific_experience includes similar civil/construction projects plus Uganda/geographical-condition experience.
 - "Regional experience is mandatory" belongs in regional_experience.
 - "Fluency in English" or "fluent in written and spoken English" belongs in required_languages.
 - "AutoCAD", "Primavera", "MS Project", "GIS", and similar named tools belong in required_software, not mandatory_skills.
@@ -2719,6 +2724,7 @@ Examples from the real tender formats:
 - "15 years post-graduate experience" is general_experience and minimum_years_experience=15.
 - "at least three projects of similar setting" is specific_experience and minimum_similar_projects=3.
 - "Resident Engineer: One" means quantity=1.
+- "Senior Laboratory Technician Higher Diploma (HD) in Civil Engineering or related discipline with minimum of 10years' experience in similar position on civil and construction projects. Experience in similar geographical conditions, ideally in Uganda is added advantage" is a real staff role, not boilerplate. Extract the role, education, 10 years experience, civil/construction project experience, and Uganda/geographical-condition preference.
 - "Regional experience is mandatory" is regional_experience.
 - Named software/tools such as AutoCAD, Primavera, MS Project, GIS, or BIM belong in required_software, not mandatory_skills.
 Do not extract duties/responsibilities in this stage unless they are inseparable from an explicit experience requirement. Do not transfer requirements from one role to another. If a requirement is not stated for a position, leave that field empty.

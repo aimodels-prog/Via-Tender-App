@@ -165,6 +165,27 @@ async function main() {
   if (unknownFactsTender.positions[0].minimum_years_experience !== undefined) throw new Error("Missing years must not default to 0.");
   if (unknownFactsTender.positions[0].nationality_preference !== "") throw new Error("Missing nationality must not default to Any.");
 
+  const seniorLabTechnicianTender = normalizeTenderRecord({
+    positions: [{
+      position_title: "Senior Laboratory Technician",
+      minimum_education: "Higher Diploma (HD) in Civil Engineering or related discipline with minimum of 10years' experience in similar position on civil and construction projects. Experience in similar geographical conditions, ideally in Uganda is added advantage",
+      minimum_years_experience: 10,
+      general_experience: "minimum of 10years' experience in similar position",
+      specific_experience: "civil and construction projects. Experience in similar geographical conditions, ideally in Uganda is added advantage",
+    }],
+  });
+  const seniorLabTechnician = seniorLabTechnicianTender.positions.find((position: any) => position.position_title === "Senior Laboratory Technician");
+  if (!seniorLabTechnician) throw new Error("Senior Laboratory Technician with real requirements must be retained.");
+  if (!/Higher Diploma \(HD\) in Civil Engineering or related discipline/i.test(seniorLabTechnician.minimum_education || "")) {
+    throw new Error("Senior Laboratory Technician education must retain Higher Diploma Civil Engineering wording.");
+  }
+  if (seniorLabTechnician.minimum_years_experience !== 10 || !/10years/i.test(seniorLabTechnician.general_experience || "")) {
+    throw new Error("Senior Laboratory Technician 10 years experience must be extracted.");
+  }
+  if (!/Uganda|geographical conditions|civil and construction projects/i.test(seniorLabTechnician.specific_experience || "")) {
+    throw new Error("Senior Laboratory Technician specific/geographical experience must be retained.");
+  }
+
   const repeatedTitleTender = mergeTenderExtractions([
     { positions: [{ position_title: "Civil Engineer", source_position_number: 2, lot_reference: "Lot A", work_location: "North", minimum_education: "BSc Civil Engineering" }] },
     { positions: [{ position_title: "Civil Engineer", source_position_number: 2, lot_reference: "Lot B", work_location: "South", minimum_education: "MSc Civil Engineering" }] },
