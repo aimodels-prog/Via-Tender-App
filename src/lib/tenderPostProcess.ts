@@ -194,6 +194,21 @@ function stricterExperienceText(current: any, next: any) {
   return richerText(currentText, nextText);
 }
 
+function cleanRoleDutiesStatus(value: any, roleDescription = "") {
+  const status = cleanText(value).toLowerCase().replace(/[^a-z_]+/g, "_").replace(/^_|_$/g, "");
+  if (["explicit", "tor_scope", "not_stated", "needs_review"].includes(status)) return status;
+  if (/^not separately stated for this role/i.test(cleanText(roleDescription))) return "tor_scope";
+  if (cleanText(roleDescription)) return "explicit";
+  return "needs_review";
+}
+
+function richerRoleDutiesStatus(current: any, next: any) {
+  const priority: Record<string, number> = { explicit: 4, tor_scope: 3, not_stated: 2, needs_review: 1 };
+  const currentStatus = cleanRoleDutiesStatus(current);
+  const nextStatus = cleanRoleDutiesStatus(next);
+  return (priority[nextStatus] || 0) > (priority[currentStatus] || 0) ? nextStatus : currentStatus;
+}
+
 function cleanTenderRoleDescription(value: any) {
   const text = cleanTenderRequirementText(value)
     .split(/\bEducation\s*:?\s*\d{0,2}\b/i)[0]
@@ -261,6 +276,7 @@ export function normalizeTenderPosition(position: any, index = 0) {
   const generalExperience = position?.general_experience || "";
   const specificExperience = position?.specific_experience || "";
   const roleDescription = position?.role_description || position?.description || position?.responsibilities || "";
+  const cleanedRoleDescription = cleanTenderRoleDescription(roleDescription);
 
   return {
     ...position,
@@ -278,7 +294,8 @@ export function normalizeTenderPosition(position: any, index = 0) {
       Number.isFinite(rawMinimumYears) && rawMinimumYears >= 0 ? rawMinimumYears : undefined,
     general_experience: cleanTenderRequirementText(generalExperience),
     specific_experience: cleanTenderSpecificExperience(specificExperience),
-    role_description: cleanTenderRoleDescription(roleDescription),
+    role_description: cleanedRoleDescription,
+    role_duties_status: cleanRoleDutiesStatus(position?.role_duties_status, cleanedRoleDescription),
     required_sector_experience: toArray(position?.required_sector_experience),
     mandatory_skills: toArray(position?.mandatory_skills),
     required_software: toArray(position?.required_software),
@@ -328,6 +345,7 @@ export function mergeTenderPositions(positions: any[]) {
       general_experience: stricterExperienceText(current.general_experience, position.general_experience),
       specific_experience: stricterExperienceText(current.specific_experience, position.specific_experience),
       role_description: richerText(current.role_description, position.role_description),
+      role_duties_status: richerRoleDutiesStatus(current.role_duties_status, position.role_duties_status),
       required_sector_experience: mergeUniqueValues(current.required_sector_experience, position.required_sector_experience),
       mandatory_skills: mergeUniqueValues(current.mandatory_skills, position.mandatory_skills),
       required_software: mergeUniqueValues(current.required_software, position.required_software),
@@ -384,11 +402,13 @@ export function isInvalidTenderPositionTitle(value: string) {
 export function getTenderPositionWarnings(position: any) {
   const warnings: string[] = [];
   const title = cleanText(position?.position_title);
+  const dutiesStatus = cleanRoleDutiesStatus(position?.role_duties_status, position?.role_description);
   if (isInvalidTenderPositionTitle(title)) warnings.push("This does not look like a real personnel position.");
   if (!Number.isFinite(Number(position?.quantity)) || Number(position.quantity) <= 0) warnings.push("Quantity was not found in the source.");
   if (!cleanText(position?.minimum_education)) warnings.push("Education requirement was not extracted.");
   if (!cleanText(position?.general_experience) && !cleanText(position?.specific_experience)) warnings.push("Experience requirements were not extracted.");
-  if (!cleanText(position?.role_description)) warnings.push("Responsibilities were not extracted.");
+  if (dutiesStatus === "needs_review") warnings.push("Responsibilities need review because duties may have been missed or could not be mapped.");
+  if (!cleanText(position?.role_description) && dutiesStatus !== "not_stated") warnings.push("Responsibilities were not extracted.");
   if (!Array.isArray(position?.source_page_numbers) || position.source_page_numbers.length === 0) warnings.push("No source page evidence is attached.");
   const evidenceFields = new Set((Array.isArray(position?.field_evidence) ? position.field_evidence : []).map((item: any) => cleanText(item?.field).toLowerCase()));
   const evidenceRequiredFor = [
@@ -413,6 +433,7 @@ function hasPositionRequirementDetail(position: any) {
     cleanText(position.general_experience) ||
     cleanText(position.specific_experience) ||
     cleanText(position.role_description) ||
+    cleanRoleDutiesStatus(position.role_duties_status, position.role_description) === "not_stated" ||
     (Array.isArray(position.required_keywords) && position.required_keywords.length) ||
     (Array.isArray(position.mandatory_skills) && position.mandatory_skills.length)
   );
@@ -475,7 +496,7 @@ export function normalizeTenderRecord(tender: any) {
   const completeCoreCount = normalizedPositions.filter((position) =>
     cleanText(position.minimum_education) &&
     (cleanText(position.general_experience) || cleanText(position.specific_experience)) &&
-    cleanText(position.role_description),
+    (cleanText(position.role_description) || cleanRoleDutiesStatus(position.role_duties_status, position.role_description) === "not_stated"),
   ).length;
   const incompleteCorePositions = normalizedPositions
     .map((position) => ({
@@ -483,7 +504,8 @@ export function normalizeTenderRecord(tender: any) {
       missing: [
         !cleanText(position.minimum_education) ? "education" : "",
         !cleanText(position.general_experience) && !cleanText(position.specific_experience) ? "experience" : "",
-        !cleanText(position.role_description) ? "responsibilities" : "",
+        !cleanText(position.role_description) && cleanRoleDutiesStatus(position.role_duties_status, position.role_description) !== "not_stated" ? "responsibilities" : "",
+        cleanRoleDutiesStatus(position.role_duties_status, position.role_description) === "needs_review" ? "responsibilities review" : "",
       ].filter(Boolean),
     }))
     .filter((item) => item.missing.length > 0);

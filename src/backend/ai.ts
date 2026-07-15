@@ -239,19 +239,20 @@ const tenderSchema: Schema = {
           general_experience: { type: Type.STRING, description: "Extract the exact verbatim general experience requirement for the position" },
           specific_experience: { type: Type.STRING, description: "Extract the exact verbatim specific experience requirement for the position" },
           role_description: { type: Type.STRING, description: "Extract the exact verbatim role or tasks or responsibilities description" },
-          required_sector_experience: { type: Type.ARRAY, items: { type: Type.STRING } },
-          mandatory_skills: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Specific mandatory technical skills or software needs" },
-          required_software: { type: Type.ARRAY, items: { type: Type.STRING } },
-          required_certifications: { type: Type.ARRAY, items: { type: Type.STRING } },
-          professional_memberships: { type: Type.ARRAY, items: { type: Type.STRING } },
-          required_languages: { type: Type.ARRAY, items: { type: Type.STRING } },
-          regional_experience: { type: Type.STRING },
-          country_experience: { type: Type.STRING },
-          required_keywords: { type: Type.ARRAY, items: { type: Type.STRING } },
-          nationality_preference: { type: Type.STRING },
-          residency_requirement: { type: Type.STRING },
-          position_deliverables: { type: Type.ARRAY, items: { type: Type.STRING } },
-          evaluation_points: { type: Type.NUMBER },
+          role_duties_status: { type: Type.STRING, description: "One of: explicit, tor_scope, not_stated, needs_review. explicit = duties stated under the role; tor_scope = duties only derive from general TOR scope; not_stated = searched but no duties found; needs_review = possible duties exist but extractor could not confidently map them." },
+          required_sector_experience: { type: Type.ARRAY, description: "Explicit sector/domain experience required for this role, e.g. railway, roads, bridges, urban transport, water, power, buildings. Do not include generic duties or software.", items: { type: Type.STRING } },
+          mandatory_skills: { type: Type.ARRAY, description: "Explicit non-software competencies or technical capabilities required for this role, e.g. project management, contract administration, safeguards, modelling, supervision, stakeholder engagement. Do not include degrees, years, languages, or software names.", items: { type: Type.STRING } },
+          required_software: { type: Type.ARRAY, description: "Explicit software/tools/platforms required for this role only, e.g. AutoCAD, Civil 3D, Primavera, MS Project, GIS, BIM tools. Do not include general technical skills.", items: { type: Type.STRING } },
+          required_certifications: { type: Type.ARRAY, description: "Explicit certifications, licences, permits, chartership requirements, or regulatory registrations required for this role. Do not include academic degrees unless the tender presents them as professional certification.", items: { type: Type.STRING } },
+          professional_memberships: { type: Type.ARRAY, description: "Explicit membership in professional bodies or institutions required or preferred for this role, e.g. Institution of Engineers, professional board membership. Do not duplicate certifications unless stated as membership.", items: { type: Type.STRING } },
+          required_languages: { type: Type.ARRAY, description: "Explicit language requirements for this role, including proficiency if stated. Do not infer language from country or tender language.", items: { type: Type.STRING } },
+          regional_experience: { type: Type.STRING, description: "Explicit requirement for experience in a region/multi-country area, e.g. East Africa, Sub-Saharan Africa, GCC, EU. Do not put single-country requirements here." },
+          country_experience: { type: Type.STRING, description: "Explicit requirement for experience in a named country, e.g. Kenya experience, Uganda experience. Do not infer from project location unless stated as a requirement." },
+          required_keywords: { type: Type.ARRAY, description: "Short search/matching keywords explicitly present in the role requirements. Use only source-grounded terms; do not create broad synonyms or generic filler.", items: { type: Type.STRING } },
+          nationality_preference: { type: Type.STRING, description: "Explicit nationality or citizenship requirement/preference only. Leave empty for open eligibility or 'all countries'; never default to Any." },
+          residency_requirement: { type: Type.STRING, description: "Explicit residence, local presence, local registration, or local availability requirement. Do not use for nationality." },
+          position_deliverables: { type: Type.ARRAY, description: "Deliverables/outputs explicitly assigned to this role. General project deliverables belong in tender-level deliverables unless clearly tied to this position.", items: { type: Type.STRING } },
+          evaluation_points: { type: Type.NUMBER, description: "Numeric technical evaluation points assigned to this role or requirement. Do not confuse with quantity, years, input months, or page numbers." },
           source_page_numbers: { type: Type.ARRAY, items: { type: Type.INTEGER }, description: "Every PDF page supporting this position or its requirements" },
           source_quotes: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Short exact source excerpts proving the title and requirements" },
           field_evidence: {
@@ -1073,6 +1074,7 @@ export function mergeTenderExtractions(items: any[]) {
         general_experience: strictestExperienceText(current.general_experience, position.general_experience),
         specific_experience: strictestExperienceText(current.specific_experience, position.specific_experience),
         role_description: bestText(current.role_description, position.role_description || position.description),
+        role_duties_status: current.role_duties_status || position.role_duties_status,
         required_sector_experience: mergeArray(current.required_sector_experience, position.required_sector_experience),
         mandatory_skills: mergeArray(current.mandatory_skills, position.mandatory_skills),
         required_software: mergeArray(current.required_software, position.required_software),
@@ -1110,7 +1112,7 @@ function missingTenderRoleDetailCount(position: any) {
   ].filter(Boolean).length;
 }
 
-function extractTenderRoleContext(rawText: string, title: string, positionNumber?: number) {
+export function extractTenderRoleContext(rawText: string, title: string, positionNumber?: number) {
   const lines = String(rawText || "")
     .replace(/\r/g, "\n")
     .split(/\n+/)
@@ -1162,6 +1164,211 @@ function extractTenderRoleContext(rawText: string, title: string, positionNumber
   }
   if (!windows.length) return "";
   return Array.from(new Set(windows)).join("\n\n--- NEXT MATCH CONTEXT ---\n\n").slice(0, 14000);
+}
+
+export function inferTenderTableContextsFromText(pageTexts: Array<{ page_number: number; text: string }>): TenderTableContext[] {
+  const contexts: TenderTableContext[] = [];
+  let active: TenderTableContext | null = null;
+  const hasPersonnelHeader = (text: string) =>
+    /\b(?:key experts?|non[-\s]?key|professional staff|staff position|team composition|personnel|experts?)\b/i.test(text) &&
+    /\b(?:qualification|education|experience|input|months?|staff|position|role|responsibilit|duties)\b/i.test(text);
+  const hasContinuationSignal = (text: string) =>
+    /\b(?:engineer|expert|specialist|leader|surveyor|analyst|planner|economist|architect|advisor|inspector|technician|coordinator|qualification|education|experience|registered|chartered|bachelor|master|degree|diploma)\b/i.test(text);
+  const inferColumns = (text: string) => {
+    const columns = [
+      /\b(?:s\/?no|no\.|#)\b/i.test(text) ? { header: "No.", meaning: "source_position_number" } : null,
+      /\b(?:staff position|position|role|expert)\b/i.test(text) ? { header: "Position", meaning: "position_title" } : null,
+      /\b(?:qualification|education)\b/i.test(text) ? { header: "Qualification", meaning: "minimum_education" } : null,
+      /\bexperience\b/i.test(text) ? { header: "Experience", meaning: "general_experience and specific_experience" } : null,
+      /\b(?:input|months?|person[-\s]?months?)\b/i.test(text) ? { header: "Input", meaning: "input_months" } : null,
+      /\b(?:responsibilit|duties|tasks)\b/i.test(text) ? { header: "Duties", meaning: "role_description" } : null,
+    ].filter(Boolean) as Array<{ header: string; meaning: string }>;
+    return columns.length ? columns : [{ header: "Detected personnel table", meaning: "position_title and requirements" }];
+  };
+
+  for (const page of Array.isArray(pageTexts) ? pageTexts : []) {
+    const pageNumber = Number(page.page_number || 0);
+    const text = String(page.text || "");
+    if (!Number.isInteger(pageNumber) || pageNumber <= 0) continue;
+    if (hasPersonnelHeader(text)) {
+      if (active) contexts.push(active);
+      active = {
+        table_title: "Detected personnel requirements table",
+        header_page: pageNumber,
+        first_data_page: pageNumber,
+        last_data_page: pageNumber,
+        columns: inferColumns(text),
+        continues_after_chunk: false,
+      };
+      continue;
+    }
+    if (active && hasContinuationSignal(text)) {
+      active.last_data_page = pageNumber;
+      continue;
+    }
+    if (active) {
+      contexts.push(active);
+      active = null;
+    }
+  }
+  if (active) contexts.push(active);
+
+  return contexts.filter((context, index, values) =>
+    values.findIndex((other) => other.header_page === context.header_page && other.first_data_page === context.first_data_page && other.last_data_page === context.last_data_page) === index,
+  );
+}
+
+function sourcePageTextsToTenderText(pageTexts: Array<{ page_number: number; text: string }>) {
+  return (Array.isArray(pageTexts) ? pageTexts : [])
+    .map((page) => `--- PAGE ${page.page_number} ---\n${String(page.text || "").trim()}`)
+    .filter((block) => block.trim())
+    .join("\n\n");
+}
+
+async function repairTenderRolesFromFullDocumentContext(
+  currentTender: any,
+  rawTenderText: string,
+  models: string[],
+) {
+  const normalized = normalizeTenderRecord(currentTender || {});
+  const positions = Array.isArray(normalized.positions) ? normalized.positions : [];
+  if (!positions.length || !String(rawTenderText || "").trim()) return normalized;
+
+  const candidates = positions
+    .map((position: any) => ({
+      position,
+      missingCount: missingTenderRoleDetailCount(position),
+      context: extractTenderRoleContext(
+        rawTenderText,
+        position.position_title,
+        Number(position.source_position_number || 0) || undefined,
+      ),
+    }))
+    .filter((item: any) => item.context)
+    .sort((a: any, b: any) => b.missingCount - a.missingCount);
+
+  if (!candidates.length) return normalized;
+
+  const parseRepairPrompt = async (promptText: string) => {
+    const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({
+      model: modelName,
+      contents: [{ role: "user", parts: [{ text: promptText }] }],
+      config: { responseMimeType: "application/json", responseSchema: tenderSchema, temperature: 0 },
+    }), models);
+    return sanitizeExtractedValues(parseGenAIJSON(response.text || "{}"));
+  };
+
+  const batchSize = 6;
+  const repairPrompts: string[] = [];
+  for (let start = 0; start < candidates.length; start += batchSize) {
+    const batch = candidates.slice(start, start + batchSize);
+    repairPrompts.push(`You are the POSITION-FIRST full-document repair stage for a tender extraction pipeline.
+The app has already identified the real required positions. Your job is to search every provided occurrence/context for those exact roles and complete missing or weak fields.
+
+Rules:
+- Use ONLY the source context below.
+- Keep position_title as clean occupational role only. K1/K-2/Position K3 belongs only in source_position_number.
+- Extract every available education, general experience, specific experience, professional registration, certifications, skills, languages, nationality/residency, input months, evaluation points, duties, and deliverables for each listed role.
+- Do not transfer requirements between roles.
+- If duties are not separately stated under a role but general TOR tasks clearly apply to the expert team, role_description must begin with "Not separately stated for this role; responsibilities derive from TOR scope:" followed by source-grounded TOR task wording.
+- Set role_duties_status to "explicit" when duties are directly stated under the role, "tor_scope" when duties derive only from general TOR scope, "not_stated" only when this context was searched and no duties are present, or "needs_review" when possible duties exist but cannot be confidently mapped.
+- Attach field_evidence for every populated field with exact field name, page number, and verbatim quote.
+- Return valid JSON matching the tender schema with positions[] containing ONLY repaired versions of these listed positions.
+
+POSITIONS TO REPAIR:
+${JSON.stringify(batch.map((item: any) => ({
+  position_title: item.position.position_title,
+  source_position_number: item.position.source_position_number,
+  lot_reference: item.position.lot_reference,
+  expert_category: item.position.expert_category,
+  current: {
+    quantity: item.position.quantity || "",
+    input_months: item.position.input_months || "",
+    minimum_education: item.position.minimum_education || "",
+    minimum_years_experience: item.position.minimum_years_experience || "",
+    general_experience: item.position.general_experience || "",
+    specific_experience: item.position.specific_experience || "",
+    role_description: item.position.role_description || "",
+  },
+})), null, 2)}
+
+SOURCE CONTEXT BY POSITION:
+${batch.map((item: any) => `--- POSITION: ${item.position.position_title} ---\n${item.context}`).join("\n\n")}`);
+  }
+
+  const repairResults = await mapWithConcurrency(
+    repairPrompts,
+    Number(process.env.TENDER_EXTRACTION_CONCURRENCY || 2),
+    (prompt) => parseRepairPrompt(prompt),
+  );
+
+  const repairedPieces: any[] = [normalized];
+  repairResults.forEach((result) => {
+    if (result.status === "fulfilled") repairedPieces.push(result.value);
+    else console.warn("[Tender extraction] Position-first full-document repair failed; continuing.", result.reason?.message || result.reason);
+  });
+
+  return normalizeTenderRecord(mergeTenderExtractions(repairedPieces));
+}
+
+async function auditTenderExtractionWithAI(
+  currentTender: any,
+  rawTenderText: string,
+  models: string[],
+) {
+  const normalized = normalizeTenderRecord(currentTender || {});
+  const positions = Array.isArray(normalized.positions) ? normalized.positions : [];
+  if (!positions.length || !String(rawTenderText || "").trim()) return normalized;
+
+  const roleContexts = positions.slice(0, 80).map((position: any) => ({
+    position_title: position.position_title,
+    source_position_number: position.source_position_number,
+    lot_reference: position.lot_reference,
+    context: extractTenderRoleContext(rawTenderText, position.position_title, Number(position.source_position_number || 0) || undefined).slice(0, 8000),
+  }));
+  const tenderPreview = String(rawTenderText || "").slice(0, 45000);
+  const tenderEnding = String(rawTenderText || "").slice(-25000);
+  const prompt = `You are the SECOND AI AUDITOR for a tender extraction pipeline.
+Another AI already extracted the tender JSON. Your job is to audit it against source context and return only corrections/additions that are proven by source quotes.
+
+Audit questions:
+1. Did the extractor miss any real personnel position visible in the source context?
+2. Did it place K1/K-2/Position K3 codes inside position_title instead of source_position_number?
+3. Did it miss education, experience, registration, input months, duties, deliverables, nationality, location, or evaluation points that are present?
+4. Did it put a value in the wrong field?
+5. Are role duties explicit, derived from general TOR scope, genuinely not stated, or needing review?
+
+Rules:
+- Return schema-valid JSON with only corrected tender fields and corrected/added positions.
+- Every populated field must have field_evidence or tender_field_evidence.
+- Do not invent. Do not weaken stricter requirements.
+- For role_duties_status use explicit, tor_scope, not_stated, or needs_review.
+- If duties are only in general TOR scope, role_description must start with "Not separately stated for this role; responsibilities derive from TOR scope:".
+
+CURRENT EXTRACTION JSON:
+${JSON.stringify(normalized)}
+
+SOURCE PREVIEW:
+${tenderPreview}
+
+SOURCE ENDING:
+${tenderEnding}
+
+ROLE-SPECIFIC SOURCE CONTEXTS:
+${JSON.stringify(roleContexts, null, 2)}`;
+
+  try {
+    const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({
+      model: modelName,
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      config: { responseMimeType: "application/json", responseSchema: tenderSchema, temperature: 0 },
+    }), models);
+    const audited = sanitizeExtractedValues(parseGenAIJSON(response.text || "{}"));
+    return normalizeTenderRecord(mergeTenderExtractions([normalized, audited]));
+  } catch (error: any) {
+    console.warn("[Tender extraction] Second AI audit failed; continuing with pre-audit extraction.", error?.message || error);
+    return normalized;
+  }
 }
 
 export async function runParseTenderText(text: string): Promise<any> {
@@ -1375,6 +1582,11 @@ export async function runParseTenderText(text: string): Promise<any> {
   }
 
   tender = await repairTenderRoleDetails(tender);
+  tender = await auditTenderExtractionWithAI(
+    tender,
+    text,
+    [process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview", "gemini-3.5-flash"],
+  );
   const finalizedTextExtraction = await finalizeTenderExtraction(
     [tender],
     [process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview", "gemini-3.5-flash"],
@@ -1391,7 +1603,7 @@ export async function runParseTenderText(text: string): Promise<any> {
   logExtractionValidation("TENDER", tender.tender_title || tender.name || "Finalized tender", validation);
   tender.extraction_audit = {
     ...(tender.extraction_audit || {}),
-    pipeline: "roles-only + full extraction + role-detail extraction + mandatory-final-ai-synthesis + validation",
+      pipeline: "roles-only + full extraction + role-detail extraction + second-ai-audit + mandatory-final-ai-synthesis + validation",
     stage1RolesOnly: true,
     stage2RoleDetailRepair: true,
     stage3Validation: true,
@@ -1415,7 +1627,7 @@ export function selectTenderPagesForPro(
   classifications: any[],
   firstPage: number,
   lastPage: number,
-  options: { confidenceThreshold?: number; contextRadius?: number; tableContexts?: TenderTableContext[] } = {},
+  options: { confidenceThreshold?: number; contextRadius?: number; tableContexts?: TenderTableContext[]; forcedPages?: number[] } = {},
 ) {
   const confidenceThreshold = options.confidenceThreshold ?? 0.85;
   const contextRadius = options.contextRadius ?? 2;
@@ -1460,6 +1672,13 @@ export function selectTenderPagesForPro(
     if (!Number.isInteger(tableFirstPage) || !Number.isInteger(tableLastPage) || tableLastPage < tableFirstPage) continue;
     for (let page = tableFirstPage; page <= tableLastPage; page++) {
       addAnchor(page, "continued-personnel-table");
+    }
+  }
+
+  for (const page of Array.isArray(options.forcedPages) ? options.forcedPages : []) {
+    const pageNumber = Number(page);
+    if (Number.isInteger(pageNumber) && pageNumber >= firstPage && pageNumber <= lastPage) {
+      addAnchor(pageNumber, "forced-visual-layout-review");
     }
   }
 
@@ -1524,24 +1743,38 @@ export function validateTenderFieldSemantics(tender: any) {
   const issues: string[] = [];
   const text = (value: any) => String(value || "").trim();
   const lowered = (value: any) => text(value).toLowerCase();
+  const numberWord = (value: any) => ({
+    1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+    11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen", 19: "nineteen", 20: "twenty",
+    21: "twenty one", 22: "twenty two", 23: "twenty three", 24: "twenty four", 25: "twenty five", 26: "twenty six", 27: "twenty seven", 28: "twenty eight", 29: "twenty nine", 30: "thirty",
+  } as Record<number, string>)[Number(value)] || "";
   const significantTokens = (value: any) => lowered(value)
+    .replace(/^not separately stated for this role responsibilities derive from tor scope\s*/i, " ")
     .replace(/[^a-z0-9]+/g, " ")
     .split(/\s+/)
-    .filter((token) => token.length >= 4 && !/^(?:shall|with|from|that|this|will|have|must|required|minimum|experience|years?)$/.test(token));
+    .filter((token) => token.length >= 4 && !/^(?:shall|with|from|that|this|will|have|must|required|minimum|experience|years?|separately|stated|role|responsibilities|derive|derived|scope)$/.test(token));
   const fieldEvidence = (position: any, field: string) => (Array.isArray(position?.field_evidence) ? position.field_evidence : [])
     .filter((item: any) => lowered(item?.field) === field.toLowerCase() && text(item?.quote));
   const hasFieldEvidence = (position: any, field: string, value: any) => {
     const rawValue = text(value);
     if (!rawValue) return true;
     const evidences = fieldEvidence(position, field);
-    if (!evidences.length) return false;
+    const fallbackEvidence = (Array.isArray(position?.source_quotes) ? position.source_quotes : [])
+      .map((quote: any) => ({ field, quote: text(quote) }))
+      .filter((item: any) => item.quote);
+    const evidencePool = evidences.length ? evidences : fallbackEvidence;
+    if (!evidencePool.length) return false;
     if (typeof value === "number" || /^\d+(?:\.\d+)?$/.test(rawValue)) {
       const escapedValue = rawValue.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      return evidences.some((item: any) => new RegExp(`\\b${escapedValue}\\b`).test(String(item.quote || "")));
+      const word = numberWord(rawValue);
+      return evidencePool.some((item: any) => {
+        const quote = String(item.quote || "");
+        return new RegExp(`\\b${escapedValue}\\b`).test(quote) || (word ? new RegExp(`\\b${word.replace(/\s+/g, "\\s+")}\\b`, "i").test(quote) : false);
+      });
     }
     const tokens = significantTokens(rawValue);
     if (!tokens.length) return true;
-    return evidences.some((item: any) => {
+    return evidencePool.some((item: any) => {
       const quoteTokens = new Set(significantTokens(item?.quote));
       const hits = tokens.filter((token) => quoteTokens.has(token)).length;
       return hits >= Math.min(3, tokens.length) || hits / tokens.length >= 0.35;
@@ -1564,8 +1797,9 @@ export function validateTenderFieldSemantics(tender: any) {
   (Array.isArray(tender?.positions) ? tender.positions : []).forEach((position: any, index: number) => {
     const title = String(position?.position_title || "").trim();
     const label = `Position ${index + 1}${title ? ` (${title})` : ""}`;
+    const titleLooksLikeRole = /\b(?:manager|engineer|expert|specialist|leader|coordinator|surveyor|inspector|architect|designer|planner|scheduler|advisor|trainer|analyst|officer|supervisor|controller|technician|draftsman|economist|sociologist|environmentalist|hydrologist|geologist)\b/i.test(title);
     if (!title) issues.push(`${label}: position_title is empty.`);
-    if (/^\s*(?:K\s*[-.]?\s*\d+|\d+\s*[.):/-]|position\s*(?:no\.?|number)?\s*\d+)\b/i.test(title)) {
+    if (/^\s*(?:K\s*[-.]?\s*\d+|\d+\s*[.):/-]|position\s*(?:no\.?|number)?\s*(?:K\s*[-.]?\s*)?\d+)\b/i.test(title)) {
       issues.push(`${label}: position_title contains a row/reference code instead of only the occupational role.`);
     }
     if (/\b(?:qty|quantity|\d+\s*(?:nos?\.?|persons?|staff))\b/i.test(title)) {
@@ -1575,7 +1809,7 @@ export function validateTenderFieldSemantics(tender: any) {
       issues.push(`${label}: position_title contains requirement text that belongs in another field.`);
     }
     if (title.length > 100) issues.push(`${label}: position_title is too long to be a clean occupational role.`);
-    if (/\b(?:documents?|proposal|consultant|contract|terms?|conditions?|eligibility|qualification of|obligations?|assumptions?|risks?|institution|authority|declaration|submission|appendix|section)\b/i.test(title)) {
+    if (!titleLooksLikeRole && /\b(?:documents?|proposal|consultant|contract|terms?|conditions?|eligibility|qualification of|obligations?|assumptions?|risks?|institution|authority|declaration|submission|appendix|section)\b/i.test(title)) {
       issues.push(`${label}: position_title looks like a tender clause or heading, not a personnel role.`);
     }
 
@@ -1625,13 +1859,14 @@ export function validateTenderFieldSemantics(tender: any) {
     }
 
     const roleDescription = String(position?.role_description || "").trim();
+    const roleDutiesStatus = text(position?.role_duties_status);
     if (roleDescription && roleDescription.toLowerCase() === title.toLowerCase()) {
       issues.push(`${label}: role_description repeats the title instead of containing duties.`);
     }
-    if (roleDescription && /\b(?:degree|diploma|bachelor|master|bsc|msc|phd|minimum\s+\d+\s+years?|qualification|registered|chartered)\b/i.test(roleDescription) && !/\b(?:responsibilit|duties|tasks|prepare|review|supervis|manage|coordinate|administer|inspect|ensure|monitor|evaluate|report)\b/i.test(roleDescription)) {
+    if (roleDescription && !/^(?:not_stated|needs_review)$/i.test(roleDutiesStatus) && /\b(?:degree|diploma|bachelor|master|bsc|msc|phd|minimum\s+\d+\s+years?|qualification|registered|chartered)\b/i.test(roleDescription) && !/\b(?:responsibilit|duties|tasks|prepare|review|supervis|manage|coordinate|administer|inspect|ensure|monitor|evaluate|report)\b/i.test(roleDescription)) {
       issues.push(`${label}: role_description appears to contain qualifications or years instead of duties.`);
     }
-    if (roleDescription && !/\b(?:responsibilit|duties|tasks|prepare|review|supervis|manage|coordinate|administer|inspect|ensure|monitor|evaluate|report|design|conduct|assist|advise|implement|control|verify)\b/i.test(roleDescription)) {
+    if (roleDescription && !/^(?:not_stated|needs_review)$/i.test(roleDutiesStatus) && !/\b(?:responsibilit|duties|tasks|prepare|review|supervis|manage|coordinate|administer|inspect|ensure|monitor|evaluate|report|design|conduct|assist|advise|implement|control|verify)\b/i.test(roleDescription)) {
       issues.push(`${label}: role_description does not contain clear duty or activity wording.`);
     }
 
@@ -1645,6 +1880,47 @@ export function validateTenderFieldSemantics(tender: any) {
     }
     if (nationality && /\b(?:degree|diploma|experience|years?|responsibilit|duties|tasks|months?)\b/i.test(nationality)) {
       issues.push(`${label}: nationality_preference contains non-nationality text.`);
+    }
+
+    const sectorExperience = (Array.isArray(position?.required_sector_experience) ? position.required_sector_experience : []).map(text).filter(Boolean);
+    if (sectorExperience.some((item) => /\b(?:degree|bachelor|master|diploma|license|licence|registered|chartered|AutoCAD|Civil\s*3D|Primavera|MS Project|GIS|BIM|English|French|Arabic|Swahili)\b/i.test(item))) {
+      issues.push(`${label}: required_sector_experience contains education, certification, software, or language text.`);
+    }
+    const skills = (Array.isArray(position?.mandatory_skills) ? position.mandatory_skills : []).map(text).filter(Boolean);
+    if (skills.some((item) => /\b(?:degree|bachelor|master|diploma|\d+\s+years?|AutoCAD|Civil\s*3D|Primavera|MS Project|GIS|BIM|English|French|Arabic|Swahili)\b/i.test(item))) {
+      issues.push(`${label}: mandatory_skills contains degree, years, software, or language text that belongs in another field.`);
+    }
+    const software = (Array.isArray(position?.required_software) ? position.required_software : []).map(text).filter(Boolean);
+    if (software.some((item) => /\b(?:degree|bachelor|master|experience|years?|registered|chartered|English|French|Arabic|Swahili)\b/i.test(item))) {
+      issues.push(`${label}: required_software contains non-software requirement text.`);
+    }
+    const certifications = (Array.isArray(position?.required_certifications) ? position.required_certifications : []).map(text).filter(Boolean);
+    if (certifications.some((item) => /\b(?:years?|experience|duties|responsibilit|tasks|AutoCAD|Civil\s*3D|Primavera|MS Project|English|French|Arabic|Swahili)\b/i.test(item))) {
+      issues.push(`${label}: required_certifications contains experience, duty, software, or language text.`);
+    }
+    const memberships = (Array.isArray(position?.professional_memberships) ? position.professional_memberships : []).map(text).filter(Boolean);
+    if (memberships.some((item) => /\b(?:years?|experience|duties|responsibilit|tasks|AutoCAD|Civil\s*3D|Primavera|MS Project)\b/i.test(item))) {
+      issues.push(`${label}: professional_memberships contains non-membership text.`);
+    }
+    const languages = (Array.isArray(position?.required_languages) ? position.required_languages : []).map(text).filter(Boolean);
+    if (languages.some((item) => /\b(?:degree|bachelor|master|experience|years?|AutoCAD|Civil\s*3D|Primavera|registered|chartered)\b/i.test(item))) {
+      issues.push(`${label}: required_languages contains non-language requirement text.`);
+    }
+    const regionalExperience = text(position?.regional_experience);
+    if (regionalExperience && /\b(?:degree|bachelor|master|duties|responsibilit|AutoCAD|Primavera|English|French|Arabic|Swahili)\b/i.test(regionalExperience)) {
+      issues.push(`${label}: regional_experience contains non-region requirement text.`);
+    }
+    const countryExperience = text(position?.country_experience);
+    if (countryExperience && /\b(?:degree|bachelor|master|duties|responsibilit|AutoCAD|Primavera|English|French|Arabic|Swahili)\b/i.test(countryExperience)) {
+      issues.push(`${label}: country_experience contains non-country requirement text.`);
+    }
+    const deliverables = (Array.isArray(position?.position_deliverables) ? position.position_deliverables : []).map(text).filter(Boolean);
+    if (deliverables.some((item) => /\b(?:degree|bachelor|master|\d+\s+years?|registered|chartered|English|French|Arabic|Swahili)\b/i.test(item))) {
+      issues.push(`${label}: position_deliverables contains qualifications, years, registration, or language text.`);
+    }
+    const keywords = (Array.isArray(position?.required_keywords) ? position.required_keywords : []).map(text).filter(Boolean);
+    if (keywords.some((item) => item.length > 80 || /\b(?:shall|must|required|minimum|responsibilities include)\b/i.test(item))) {
+      issues.push(`${label}: required_keywords should contain short source terms, not full requirement sentences.`);
     }
 
     for (const field of populatedEvidenceFields) {
@@ -1794,9 +2070,35 @@ SEMANTIC FIELD CONTRACT:
 - general_experience = broad professional or sector experience requirements.
 - specific_experience = role-, project-, country-, assignment-, or task-specific experience requirements.
 - role_description = duties, responsibilities, functions, tasks, and expected activities, not qualifications or years.
+- role_duties_status = explicit, tor_scope, not_stated, or needs_review. Never leave duties ambiguous: use explicit for role-specific duties, tor_scope for general TOR-derived duties, not_stated when searched and absent, and needs_review when possible duties may have been missed.
 - input_months = staff effort/man-months, not quantity or experience.
-- work_location, nationality_preference, residency_requirement, lot_reference, evaluation_points, languages, certifications, memberships, software, skills, and deliverables must each contain only the meaning represented by their field name.
+- work_location = actual assignment/project/work location only.
+- required_sector_experience = source-stated sector/domain experience only.
+- mandatory_skills = explicit non-software competencies only.
+- required_software = named software/tools only.
+- required_certifications = certifications, licences, permits, professional registration, or chartership only.
+- professional_memberships = membership in professional bodies only.
+- required_languages = explicit language/proficiency requirements only; never infer from tender language.
+- regional_experience = explicit regional/multi-country experience only.
+- country_experience = explicit named-country experience only.
+- nationality_preference = explicit nationality/citizenship requirement only; never default to Any.
+- residency_requirement = explicit residence/local presence/local registration requirement only.
+- position_deliverables = outputs explicitly assigned to that role only.
+- evaluation_points = numeric scoring points only; not quantity, years, months, or page numbers.
+- required_keywords = short source-grounded matching terms only; do not invent synonyms.
 - Understand the meaning of table columns and surrounding headings before assigning any value. Do not copy an entire row into one field.
+
+REAL TENDER FIELD EXAMPLES:
+- "K-1: Senior Highway Design Engineer /Team Leader for Design Update 10" means source_position_number=1, position_title="Senior Highway Design Engineer / Team Leader for Design Update", evaluation_points=10. The "K-1" and "10" must not be part of the title.
+- "Registered/Chartered Engineer with Valid practising certificate" belongs in required_certifications or professional_memberships, not in required_languages or general_experience.
+- "Should have a minimum of a Master's Degree in Civil Engineering, Highways, Geotechnical Engineering" belongs in minimum_education.
+- "15 years post-graduate experience..." belongs in general_experience and minimum_years_experience=15. Role/project-specific parts such as "as Design Engineer" or "at least three projects of similar setting" belong in specific_experience / minimum_similar_projects.
+- "Staff Position Qualification" tables mean the first column is position_title and the qualification cell maps into minimum_education / certifications / experience depending on wording.
+- "Resident Engineer: One" means position_title="Resident Engineer" and quantity=1.
+- "Regional experience is mandatory" belongs in regional_experience.
+- "Fluency in English" or "fluent in written and spoken English" belongs in required_languages.
+- "AutoCAD", "Primavera", "MS Project", "GIS", and similar named tools belong in required_software, not mandatory_skills.
+- General supervision scope such as "comprehensive supervision of project activities" can support role_description only with role_duties_status="tor_scope" when duties are not separately stated under the role.
 
 CANDIDATE EXTRACTION JSON:
 ${payload}`;
@@ -1808,13 +2110,120 @@ ${payload}`;
     }), models);
     return sanitizeExtractedValues(parseGenAIJSON(response.text || "{}"));
   };
+  const roleKey = (position: any) => String(position?.position_title || position?.title || "")
+    .toLowerCase()
+    .replace(/^\s*k\s*[-.]?\s*\d+\s*[:.)-]?\s*/i, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+  const numberWord = (value: any) => ({
+    1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+    11: "eleven", 12: "twelve", 13: "thirteen", 14: "fourteen", 15: "fifteen", 16: "sixteen", 17: "seventeen", 18: "eighteen", 19: "nineteen", 20: "twenty",
+    21: "twenty one", 22: "twenty two", 23: "twenty three", 24: "twenty four", 25: "twenty five", 26: "twenty six", 27: "twenty seven", 28: "twenty eight", 29: "twenty nine", 30: "thirty",
+  } as Record<number, string>)[Number(value)] || "";
+  const evidenceValueMatches = (quote: any, value: any) => {
+    const quoteText = String(quote || "");
+    const rawValue = String(value || "").trim();
+    if (!quoteText || !rawValue) return false;
+    if (/^\d+(?:\.\d+)?$/.test(rawValue)) {
+      const word = numberWord(rawValue);
+      const escaped = rawValue.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      return new RegExp(`\\b${escaped}\\b`).test(quoteText) || (word ? new RegExp(`\\b${word.replace(/\s+/g, "\\s+")}\\b`, "i").test(quoteText) : false);
+    }
+    const valueTokens = rawValue.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(/\s+/).filter((token) => token.length >= 4);
+    const quoteTokens = new Set(quoteText.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(/\s+/).filter(Boolean));
+    if (!valueTokens.length) return false;
+    const hits = valueTokens.filter((token) => quoteTokens.has(token)).length;
+    return hits >= Math.min(3, valueTokens.length) || hits / valueTokens.length >= 0.35;
+  };
+  const hydrateFieldEvidence = (position: any) => {
+    const existingEvidence = Array.isArray(position?.field_evidence) ? position.field_evidence : [];
+    const evidenceFields = new Set(existingEvidence.map((item: any) => String(item?.field || "").toLowerCase()));
+    const sourceQuotes = Array.from(new Set([
+      ...(Array.isArray(position?.source_quotes) ? position.source_quotes : []),
+      ...existingEvidence.map((item: any) => item.quote),
+    ].filter(Boolean)));
+    const sourcePages = (Array.isArray(position?.source_page_numbers) ? position.source_page_numbers : [])
+      .map(Number)
+      .filter((page: number) => Number.isInteger(page) && page > 0);
+    const pageNumber = sourcePages[0] || 1;
+    const fields = [
+      "position_title",
+      "quantity",
+      "minimum_education",
+      "minimum_years_experience",
+      "minimum_specific_years",
+      "general_experience",
+      "specific_experience",
+      "role_description",
+      "input_months",
+      "work_location",
+      "nationality_preference",
+    ];
+    const hydrated = [...existingEvidence];
+    for (const field of fields) {
+      const value = position?.[field];
+      if (value === undefined || value === null || !String(value).trim() || evidenceFields.has(field)) continue;
+      const quote = sourceQuotes.find((candidate) => evidenceValueMatches(candidate, value));
+      if (quote) {
+        hydrated.push({ field, page_number: pageNumber, quote });
+        evidenceFields.add(field);
+      }
+    }
+    return hydrated;
+  };
+  const mergeEvidenceIntoFinalPositions = (tender: any) => {
+    const sourcePositions = [
+      ...(Array.isArray(candidate?.positions) ? candidate.positions : []),
+      ...positionFragments,
+    ];
+    return {
+      ...tender,
+      positions: (Array.isArray(tender?.positions) ? tender.positions : []).map((position: any) => {
+        const finalKey = roleKey(position);
+        const finalNumber = Number(position?.source_position_number || 0) || 0;
+        const matches = sourcePositions.filter((source: any) => {
+          const sourceKey = roleKey(source);
+          const sourceNumber = Number(source?.source_position_number || 0) || 0;
+          if (finalNumber && sourceNumber && finalNumber === sourceNumber) return true;
+          if (!finalKey || !sourceKey) return false;
+          return finalKey === sourceKey || finalKey.includes(sourceKey) || sourceKey.includes(finalKey);
+        });
+        const fieldEvidence = new Map<string, any>();
+        [...matches, position].forEach((source: any) => {
+          (Array.isArray(source?.field_evidence) ? source.field_evidence : []).forEach((evidence: any) => {
+            const key = `${String(evidence?.field || "").toLowerCase()}|${Number(evidence?.page_number || 0)}|${String(evidence?.quote || "")}`;
+            if (String(evidence?.field || "").trim() && Number(evidence?.page_number || 0) > 0 && String(evidence?.quote || "").trim()) {
+              fieldEvidence.set(key, evidence);
+            }
+          });
+        });
+        const mergedPosition = {
+          ...position,
+          source_page_numbers: Array.from(new Set([
+            ...(Array.isArray(position?.source_page_numbers) ? position.source_page_numbers : []),
+            ...matches.flatMap((source: any) => Array.isArray(source?.source_page_numbers) ? source.source_page_numbers : []),
+          ].map(Number).filter((page: number) => Number.isInteger(page) && page > 0))).sort((a, b) => a - b),
+          source_quotes: Array.from(new Set([
+            ...(Array.isArray(position?.source_quotes) ? position.source_quotes : []),
+            ...matches.flatMap((source: any) => Array.isArray(source?.source_quotes) ? source.source_quotes : []),
+          ].filter(Boolean))),
+          field_evidence: Array.from(fieldEvidence.values()),
+        };
+        return {
+          ...mergedPosition,
+          field_evidence: hydrateFieldEvidence(mergedPosition),
+        };
+      }),
+    };
+  };
   let finalized = await generateFinal(prompt);
+  finalized = mergeEvidenceIntoFinalPositions(finalized);
   if (!Array.isArray(finalized?.positions) || finalized.positions.length === 0) {
     throw new Error("Final tender synthesis did not return any valid personnel positions.");
   }
   let semanticIssues = validateTenderFieldSemantics(finalized);
   if (semanticIssues.length > 0) {
-    finalized = await generateFinal(`${prompt}
+    finalized = mergeEvidenceIntoFinalPositions(await generateFinal(`${prompt}
 
 SEMANTIC VALIDATION RETRY:
 Your previous final result failed these field-meaning checks:
@@ -1823,7 +2232,7 @@ ${semanticIssues.map((issue) => `- ${issue}`).join("\n")}
 Previous result:
 ${JSON.stringify(finalized)}
 
-Rebuild the final tender object from the candidate extraction. Correct every field-placement problem. In particular, position_title must contain only the clean occupational role and never K-1, numbering, quantity, qualification, experience, or duties. Return only the corrected schema-valid JSON.`);
+Rebuild the final tender object from the candidate extraction. Correct every field-placement problem. Preserve field_evidence from the source fragments for every populated field. In particular, position_title must contain only the clean occupational role and never K-1, numbering, quantity, qualification, experience, or duties. Return only the corrected schema-valid JSON.`));
     semanticIssues = validateTenderFieldSemantics(finalized);
   }
   if (!Array.isArray(finalized?.positions) || finalized.positions.length === 0 || semanticIssues.length > 0) {
@@ -1892,7 +2301,12 @@ export async function runParseTenderPdfFiles(files: TenderPdfInput[]): Promise<a
 
     const modelNames = [process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview", "gemini-3.5-flash"];
     const classificationModels = [process.env.TENDER_CLASSIFICATION_MODEL || "gemini-3.5-flash", modelNames[0]];
-    const tableContexts = await extractTenderTableContexts(sourcePageTexts, classificationModels);
+    const deterministicTableContexts = inferTenderTableContextsFromText(sourcePageTexts);
+    const aiTableContexts = await extractTenderTableContexts(sourcePageTexts, classificationModels);
+    const tableContexts = [...deterministicTableContexts, ...aiTableContexts]
+      .filter((context, index, values) =>
+        values.findIndex((other) => other.first_data_page === context.first_data_page && other.last_data_page === context.last_data_page && other.header_page === context.header_page) === index,
+      );
     const results = await mapWithConcurrency(
       segments,
       Number(process.env.TENDER_EXTRACTION_CONCURRENCY || 2),
@@ -1943,19 +2357,90 @@ When a visible page contains table rows without a repeated header, apply the inh
             return sanitizeExtractedValues(parseGenAIJSON(response.text || "{}"));
           };
 
-          const roleRegisterPrompt = `You are the page-classification and authoritative personnel-register stage of a tender extraction pipeline.
+          const roleRegisterPrompt = `You are STAGE 1 and STAGE 3 of a tender extraction pipeline: page classification plus authoritative personnel register.
 ${segmentContext}
+STAGE 1 - PAGE CLASSIFICATION:
 Return exactly one page_classifications entry for EVERY page ${segment.firstPage}-${segment.lastPage}, including blank, scanned, contractual, and irrelevant pages. Categories must use: overview, deadline, scope, deliverables, staff_schedule, role_requirements, evaluation, eligibility, contract_clause, forms, financial, or irrelevant. Mark readability CLEAR, PARTIAL, or UNREADABLE and report OCR/layout warnings.
-Extract positions ONLY when the page proves the bidder must provide that person. Preserve source position number, lot reference, category, location, quantity, and exact title. Reject company obligations, eligibility documents, institutions, proposal instructions, headings, adjudicator authorities, risks, and sentence fragments.
+
+STAGE 3 - POSITION REGISTER ONLY:
+Extract positions ONLY when the page proves the bidder must provide that person. Preserve source position number, lot reference, category, location, quantity, input months, key/non-key status, and exact clean occupational title.
+If the source says "K1 Team Leader", "K-2 Railway Engineer", or "Position K3 Environmental Specialist", store only "Team Leader", "Railway Engineer", or "Environmental Specialist" in position_title. Put the numeric K reference in source_position_number only.
+Do not extract education, experience, responsibilities, certifications, languages, or skills in this stage unless they are needed as short source quotes proving the role exists.
+Reject company obligations, eligibility documents, institutions, proposal instructions, headings, adjudicator authorities, risks, and sentence fragments.
 For every populated position field, include field_evidence with exact field name, global page number, and short verbatim quote. Do not assume missing values. Return only schema-valid JSON.`;
 
-          const fullExtractionPrompt = `You are the exhaustive field-extraction stage for an international tender.
+          const tenderLevelFactsPrompt = `You are STAGE 2 of a tender extraction pipeline: tender-level procurement facts only.
 ${segmentContext}
-Read the rendered PDF visually and textually. Preserve tables, columns, headings, lists, and associations between role rows and requirement columns. Extract every tender-level fact and every real required person.
-Do not treat headings, company requirements, clauses, institutions, proposal instructions, eligibility sections, consultant obligations, adjudicator authorities, risks, or sentence fragments as positions. "Consultant" normally means the bidding firm. Never assume quantity=1, years=0, or nationality=Any.
-Capture education, general and specific experience, duties, sector experience, skills, software, certifications, memberships, languages, nationality/residency, input months, category, location, lot, quantity, deliverables, and evaluation points. For every populated position field add field_evidence with exact field name, global page number, and verbatim quote. For every populated tender-level field add tender_field_evidence in the same way. Classify every page actually present in the supplied PDF according to the provided global page mapping. Return only schema-valid JSON.`;
+Extract only tender-level facts:
+- tender_title, client, country, tender_number, deadline, duration, submission_type, tender_format
+- project_sector, scope_summary, objectives, deliverables, eligibility_requirements, evaluation_criteria, special_requirements, global_team_constraints
+Do not extract positions in this stage. Do not copy proposal form placeholders as real facts. Tender title, client, number, deadline, scope, and duration must describe the procurement itself, not a later contract template or example section.
+For every populated tender-level field, add tender_field_evidence with exact field name, global page number, and short verbatim quote. Return only schema-valid JSON.`;
+
+          const positionRequirementsPrompt = (positionSeeds: any[]) => `You are STAGE 4 of a tender extraction pipeline: requirements per known position.
+${segmentContext}
+Known position register for this segment:
+${JSON.stringify(positionSeeds.map((position: any) => ({
+  position_title: position.position_title,
+  source_position_number: position.source_position_number,
+  lot_reference: position.lot_reference,
+  expert_category: position.expert_category,
+  work_location: position.work_location,
+  quantity: position.quantity,
+})), null, 2)}
+
+Extract requirements ONLY for these known positions. Search the rendered PDF visually and textually, including table continuation rows that inherit headers from prior pages.
+Position titles must remain clean occupational roles only. Never write K1, K-2, Position K3, row numbers, quantities, or lot codes into position_title.
+For each known position found in this segment, extract education, general experience, specific experience, sector/project experience, professional registration, certifications, skills, software, memberships, languages, regional/country experience, nationality/residency, similar project requirements, evaluation points, and input months if stated.
+Field placement rules:
+- required_sector_experience = explicit domain/sector experience such as railway, road, bridge, urban transport, water, power, buildings.
+- mandatory_skills = explicit non-software abilities/capabilities, not degrees, years, languages, or software.
+- required_software = named software/tools only.
+- required_certifications = licences, permits, chartership, professional registration, safety/environmental certifications.
+- professional_memberships = membership in professional institutions/bodies only.
+- required_languages = explicit language and proficiency requirements only.
+- regional_experience = regional/multi-country area requirements only.
+- country_experience = named-country experience requirements only.
+- required_keywords = short source-grounded matching terms, never invented synonyms.
+- nationality_preference = explicit nationality/citizenship only; never default to Any.
+- residency_requirement = explicit residence/local presence/local registration only.
+- position_deliverables = outputs assigned to this role only; general tender deliverables stay tender-level.
+- evaluation_points = numeric scoring points only; not quantity, years, months, or page numbers.
+Examples from the real tender formats:
+- "K-1: Senior Highway Design Engineer /Team Leader for Design Update 10" means source_position_number=1, position_title="Senior Highway Design Engineer / Team Leader for Design Update", evaluation_points=10.
+- "Registered/Chartered Engineer with Valid practising certificate" is a certification/registration requirement.
+- "Master's Degree in Civil Engineering, Highways, Geotechnical Engineering" is minimum_education.
+- "15 years post-graduate experience" is general_experience and minimum_years_experience=15.
+- "at least three projects of similar setting" is specific_experience and minimum_similar_projects=3.
+- "Resident Engineer: One" means quantity=1.
+- "Regional experience is mandatory" is regional_experience.
+- Named software/tools such as AutoCAD, Primavera, MS Project, GIS, or BIM belong in required_software, not mandatory_skills.
+Do not extract duties/responsibilities in this stage unless they are inseparable from an explicit experience requirement. Do not transfer requirements from one role to another. If a requirement is not stated for a position, leave that field empty.
+For every populated position field, add field_evidence with exact field name, global page number, and verbatim quote. Return only schema-valid JSON.`;
+
+          const dutiesPrompt = (positionSeeds: any[]) => `You are STAGE 5 of a tender extraction pipeline: duties and TOR responsibilities.
+${segmentContext}
+Known position register for this segment:
+${JSON.stringify(positionSeeds.map((position: any) => ({
+  position_title: position.position_title,
+  source_position_number: position.source_position_number,
+  lot_reference: position.lot_reference,
+  expert_category: position.expert_category,
+  work_location: position.work_location,
+})), null, 2)}
+
+Extract role_description and position_deliverables ONLY for these known positions.
+Position titles must remain clean occupational roles only. Never write K1, K-2, Position K3, row numbers, quantities, or lot codes into position_title.
+First look for duties, tasks, responsibilities, functions, assignment activities, outputs, or deliverables stated under each role.
+If the tender does not separately state duties for a role but gives general TOR tasks that clearly apply to the expert team, write a concise source-grounded role_description beginning with: "Not separately stated for this role; responsibilities derive from TOR scope:" and then include the relevant TOR task wording. Attach field_evidence quotes from the TOR scope pages.
+Set role_duties_status to "explicit" when duties are directly stated under the role, "tor_scope" when duties derive only from general TOR scope, "not_stated" when this segment was searched and no duties are present, or "needs_review" when possible duties exist but cannot be confidently mapped.
+If no role-specific or applicable TOR duty text is present in this segment, leave role_description empty and set role_duties_status to "not_stated". Never invent duties from job title alone.
+Do not extract education, experience, quantity, or nationality in this stage. For every populated field, add field_evidence with exact field name, global page number, and verbatim quote. Return only schema-valid JSON.`;
 
           const expectedPages = Array.from({ length: segment.lastPage - segment.firstPage + 1 }, (_, offset) => segment.firstPage + offset);
+          const weakTextLayerPages = sourcePageTexts
+            .filter((page) => page.page_number >= segment.firstPage && page.page_number <= segment.lastPage && String(page.text || "").trim().length < 120)
+            .map((page) => page.page_number);
           const registerResult = await callPdfPass(classificationFile, roleRegisterPrompt, classificationModels);
           const routing = selectTenderPagesForPro(
             registerResult.page_classifications || [],
@@ -1965,6 +2450,7 @@ Capture education, general and specific experience, duties, sector experience, s
               confidenceThreshold: Number(process.env.TENDER_RELEVANCE_CONFIDENCE || 0.85),
               contextRadius: Number(process.env.TENDER_RELEVANCE_CONTEXT_PAGES || 2),
               tableContexts: inheritedTableContexts,
+              forcedPages: weakTextLayerPages,
             },
           );
 
@@ -1985,10 +2471,19 @@ Capture education, general and specific experience, duties, sector experience, s
             extractionContext = `${segmentContext}\nFILTERED PDF LOCAL-TO-GLOBAL PAGE MAP: ${routing.selectedPages.map((page, localIndex) => `${localIndex + 1}=>${page}`).join(", ")}. Only these selected pages are present in this PDF.`;
           }
 
-          const extractionResult = routing.selectedPages.length
-            ? await callPdfPass(extractionFile, fullExtractionPrompt.replace(segmentContext, extractionContext), modelNames)
-            : {};
-          let combined = mergeTenderExtractions([registerResult, extractionResult]);
+          const positionSeeds = Array.isArray(registerResult.positions) ? registerResult.positions : [];
+          const stagedResults = routing.selectedPages.length
+            ? await Promise.all([
+              callPdfPass(extractionFile, tenderLevelFactsPrompt.replace(segmentContext, extractionContext), modelNames),
+              positionSeeds.length
+                ? callPdfPass(extractionFile, positionRequirementsPrompt(positionSeeds).replace(segmentContext, extractionContext), modelNames)
+                : Promise.resolve({}),
+              positionSeeds.length
+                ? callPdfPass(extractionFile, dutiesPrompt(positionSeeds).replace(segmentContext, extractionContext), modelNames)
+                : Promise.resolve({}),
+            ])
+            : [];
+          let combined = mergeTenderExtractions([registerResult, ...stagedResults]);
           const classifiedPages = new Set((combined.page_classifications || []).map((item: any) => Number(item.page_number)));
           const missingPages = expectedPages.filter((page) => !classifiedPages.has(page));
           const lowReadabilityPages = (combined.page_classifications || [])
@@ -1999,7 +2494,7 @@ Capture education, general and specific experience, duties, sector experience, s
           );
 
           if (missingPages.length || lowReadabilityPages.length || incompletePositions.length) {
-            const repairPrompt = `You are the mandatory maximum-resolution repair pass for this tender segment.
+            const repairPrompt = `You are STAGE 6 repair and validation for this tender segment.
 ${segmentContext}
 Missing page classifications: ${JSON.stringify(missingPages)}
 Low-readability pages requiring OCR/layout recovery: ${JSON.stringify(lowReadabilityPages)}
@@ -2009,7 +2504,10 @@ Positions requiring repair: ${JSON.stringify(incompletePositions.map((position: 
   lot_reference: position.lot_reference,
   missing_fields: ["minimum_education", "general_experience", "specific_experience", "role_description"].filter((field) => !String(position[field] || "").trim()),
 })), null, 2)}
-Re-read the PDF visually. Return every missing page classification and complete listed role fields only where present. Attach field_evidence to every populated field. Keep roles separate by lot, position number, category, and location. Never invent absent facts.`;
+Re-read the PDF visually. Return every missing page classification and complete listed role fields only where present.
+For role_description, if no duties are separately stated under the position but general TOR scope clearly applies to the expert team, begin with "Not separately stated for this role; responsibilities derive from TOR scope:" and attach TOR source evidence.
+Set role_duties_status to explicit, tor_scope, not_stated, or needs_review for every repaired role.
+Attach field_evidence to every populated field. Keep roles separate by lot, position number, category, and location. Never invent absent facts.`;
             combined = mergeTenderExtractions([
               combined,
               await callPdfPass(
@@ -2031,6 +2529,15 @@ Re-read the PDF visually. Return every missing page classification and complete 
             skipped_pages: routing.skippedPages,
             classifier_model: classificationModels[0],
             extraction_model: modelNames[0],
+            weak_text_layer_pages: weakTextLayerPages,
+            stages: [
+              "page_classification",
+              "tender_level_facts",
+              "position_register",
+              "position_requirements",
+              "duties_and_tor_responsibilities",
+              "repair_and_validation",
+            ],
           };
           return combined;
         } finally {
@@ -2047,11 +2554,24 @@ Re-read the PDF visually. Return every missing page classification and complete 
 
     const proPageSet = new Set<number>();
     const classifierPageSet = new Set<number>();
+    const weakTextLayerPageSet = new Set<number>();
     extracted.forEach((item: any) => {
       (item.extraction_routing?.pro_pages || []).forEach((page: any) => proPageSet.add(Number(page)));
+      (item.extraction_routing?.weak_text_layer_pages || []).forEach((page: any) => weakTextLayerPageSet.add(Number(page)));
       (item.page_classifications || []).forEach((classification: any) => classifierPageSet.add(Number(classification.page_number)));
     });
-    const finalizedExtraction = await finalizeTenderExtraction(extracted, modelNames);
+    const mergedSegmentExtraction = mergeTenderExtractions(extracted);
+    const positionFirstExtraction = await repairTenderRolesFromFullDocumentContext(
+      mergedSegmentExtraction,
+      sourcePageTextsToTenderText(sourcePageTexts),
+      modelNames,
+    );
+    const auditedExtraction = await auditTenderExtractionWithAI(
+      positionFirstExtraction,
+      sourcePageTextsToTenderText(sourcePageTexts),
+      modelNames,
+    );
+    const finalizedExtraction = await finalizeTenderExtraction([auditedExtraction], modelNames);
     const tender = normalizeTenderRecord(reconcileTenderEvidencePages(finalizedExtraction, sourcePageTexts));
     if (tender.positions.length !== finalizedExtraction.positions.length) {
       throw new Error(`Final tender synthesis returned ${finalizedExtraction.positions.length} position records, but validation found only ${tender.positions.length} distinct valid roles. The extraction was rejected instead of silently correcting duplicate or invalid positions.`);
@@ -2072,7 +2592,7 @@ Re-read the PDF visually. Return every missing page classification and complete 
     tender.review_required = tender.extraction_warnings.length > 0;
     const validation = validateExtractedTender(tender);
     tender.extraction_audit = {
-      pipeline: "native-pdf-vision + page-classification + segment-extraction + maximum-resolution-repair + mandatory-final-ai-synthesis + internal-evidence-validation",
+      pipeline: "native-pdf-vision + staged-page-classification + tender-level-facts + position-register + deterministic-table-context + per-position-requirements + duties-tor-responsibilities + visual-layout-recovery + segment-repair + position-first-full-document-role-search + second-ai-audit + mandatory-final-ai-synthesis + internal-evidence-validation",
       model: modelNames[0],
       totalPages,
       segmentSize,
@@ -2083,6 +2603,9 @@ Re-read the PDF visually. Return every missing page classification and complete 
       missingPageClassifications,
       lowReadabilityPages,
       tableContextsDetected: tableContexts.length,
+      deterministicTableContextsDetected: deterministicTableContexts.length,
+      aiTableContextsDetected: aiTableContexts.length,
+      weakTextLayerPages: Array.from(weakTextLayerPageSet).sort((a, b) => a - b),
       pageRouting: {
         classifierModel: classificationModels[0],
         extractionModel: modelNames[0],

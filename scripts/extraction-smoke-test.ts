@@ -4,7 +4,7 @@ import { PDFParse } from "pdf-parse";
 import { extractUniversalCVFacts, extractUniversalTenderFacts } from "../src/lib/universalExtraction.ts";
 import { normalizeExpertCollections, postProcessExtractedExpert } from "../src/lib/cvPostProcess.ts";
 import { normalizeTenderRecord } from "../src/lib/tenderPostProcess.ts";
-import { getTenderTableContextsForRange, mergeTenderExtractions, reconcileTenderEvidencePages, selectTenderPagesForPro, validateTenderFieldSemantics } from "../src/backend/ai.ts";
+import { extractTenderRoleContext, getTenderTableContextsForRange, inferTenderTableContextsFromText, mergeTenderExtractions, reconcileTenderEvidencePages, selectTenderPagesForPro, validateTenderFieldSemantics } from "../src/backend/ai.ts";
 
 async function readDocxText(path: string) {
   const result = await mammoth.extractRawText({ buffer: fs.readFileSync(path) });
@@ -247,10 +247,12 @@ async function main() {
   }
   const semanticFieldIssues = validateTenderFieldSemantics({ positions: [
     { position_title: "K-1: Resident Engineer", quantity: 1, minimum_education: "Bachelor's Degree in Civil Engineering", role_description: "Supervise construction works." },
+    { position_title: "K1 Team Leader", quantity: 1 },
+    { position_title: "Position K3 Environmental Specialist" },
     { position_title: "Materials Engineer 2 No.", quantity: 2 },
     { position_title: "Bachelor's Degree and 15 years of experience" },
   ] });
-  if (semanticFieldIssues.length < 3) throw new Error("Semantic field validation must reject codes, quantities, and requirements inside position titles.");
+  if (semanticFieldIssues.length < 5) throw new Error("Semantic field validation must reject codes, quantities, and requirements inside position titles.");
   const cleanSemanticFields = validateTenderFieldSemantics({ positions: [{
     position_title: "Resident Engineer",
     source_position_number: 1,
@@ -269,6 +271,51 @@ async function main() {
     ],
   }] });
   if (cleanSemanticFields.length) throw new Error(`Valid semantic field mapping was rejected: ${cleanSemanticFields.join(" ")}`);
+  const sourceQuoteBackedNumericFields = validateTenderFieldSemantics({ positions: [{
+    position_title: "Resident Engineer",
+    source_page_numbers: [7],
+    source_quotes: [
+      "Resident Engineer: One",
+      "Experience: ten (10) years or more",
+      "Input months: 12",
+    ],
+    quantity: 1,
+    minimum_years_experience: 10,
+    input_months: 12,
+  }] });
+  if (sourceQuoteBackedNumericFields.length) {
+    throw new Error(`Source quote backed numeric fields should not fail evidence validation: ${sourceQuoteBackedNumericFields.join(" ")}`);
+  }
+  const contractClaimsExpert = validateTenderFieldSemantics({ positions: [{
+    position_title: "Contract/Claims Expert",
+    source_quotes: ["K-8 Contract/Claims Expert"],
+  }] });
+  if (contractClaimsExpert.some((issue) => /clause or heading/i.test(issue))) {
+    throw new Error("Contract/Claims Expert is a real role and must not be rejected as a contract clause.");
+  }
+  const notStatedRoleDuties = validateTenderFieldSemantics({ positions: [{
+    position_title: "Electrical Engineer",
+    role_description: "Electrical systems.",
+    role_duties_status: "not_stated",
+    source_quotes: ["Electrical Engineer"],
+  }] });
+  if (notStatedRoleDuties.some((issue) => /clear duty|qualifications or years/i.test(issue))) {
+    throw new Error("Duties marked not_stated must not fail duty wording validation.");
+  }
+  // Intentionally invalid examples: each value below is placed in the wrong
+  // field so the validator proves it can reject bad AI field mapping.
+  const intentionallyMisfiledSecondaryFields = validateTenderFieldSemantics({ positions: [{
+    position_title: "Railway Engineer",
+    required_sector_experience: ["Bachelor degree in Civil Engineering"],
+    mandatory_skills: ["AutoCAD"],
+    required_software: ["10 years of experience"],
+    required_languages: ["Registered Engineer"],
+    position_deliverables: ["Master degree in Transport Planning"],
+    required_keywords: ["The expert shall have a minimum of ten years of experience and must prepare reports"],
+  }] });
+  if (intentionallyMisfiledSecondaryFields.length < 6) {
+    throw new Error("Semantic validation must catch misplaced secondary tender fields.");
+  }
   const continuedTableContexts = [{
     table_title: "Key Personnel Requirements",
     header_page: 40,
@@ -286,6 +333,41 @@ async function main() {
   }
   if (getTenderTableContextsForRange(continuedTableContexts, 47, 50).length !== 0) {
     throw new Error("Table header context must stop after the table's final page.");
+  }
+  const fullDocumentRoleContext = extractTenderRoleContext([
+    "--- PAGE 10 ---",
+    "Key staff: K1 Team Leader",
+    "--- PAGE 42 ---",
+    "Team Leader Education: Master's degree in Transport Planning. Experience: 15 years general experience.",
+    "--- PAGE 88 ---",
+    "The Team Leader shall coordinate the feasibility study, supervise experts, and lead reporting.",
+  ].join("\n"), "Team Leader", 1);
+  if (!/Master's degree/i.test(fullDocumentRoleContext) || !/coordinate the feasibility study/i.test(fullDocumentRoleContext)) {
+    throw new Error("Position-first role context must search the full tender and include multiple occurrences of the same role.");
+  }
+  const deterministicTableContexts = inferTenderTableContextsFromText([
+    { page_number: 20, text: "Table 3: Required qualifications of Non-Key Staff S/No Staff Position Qualifications Experience" },
+    { page_number: 21, text: "1 Materials Engineer Education: Bachelor degree in Civil Engineering Experience: ten years or more" },
+    { page_number: 22, text: "2 Environmental Specialist Education: Bachelor degree in Environmental Science Experience in World Bank projects" },
+    { page_number: 23, text: "Section 8 Conditions of Contract payment clauses" },
+  ]);
+  if (!deterministicTableContexts.some((context) => context.first_data_page === 20 && context.last_data_page === 22)) {
+    throw new Error("Deterministic table extraction must keep continued staff table pages under the original header.");
+  }
+  const notStatedDuties = normalizeTenderRecord({ positions: [{
+    position_title: "Railway Engineer",
+    source_page_numbers: [5],
+    field_evidence: [
+      { field: "position_title", page_number: 5, quote: "Railway Engineer" },
+      { field: "minimum_education", page_number: 5, quote: "Bachelor degree in Civil Engineering" },
+      { field: "general_experience", page_number: 5, quote: "Ten years general experience" },
+    ],
+    minimum_education: "Bachelor degree in Civil Engineering",
+    general_experience: "Ten years general experience",
+    role_duties_status: "not_stated",
+  }] });
+  if (notStatedDuties.extraction_blocking_issues.some((issue: string) => /responsibilities/i.test(issue))) {
+    throw new Error("A searched-and-not-stated duty status must not block as a missed responsibility.");
   }
 
   const metadataPrecedenceTender = mergeTenderExtractions([
@@ -320,6 +402,21 @@ async function main() {
   if (!routing.skippedPages.includes(20)) throw new Error("Expected high-confidence contract boilerplate to skip Pro extraction.");
   const noClassificationRouting = selectTenderPagesForPro([], 1, 25);
   if (noClassificationRouting.selectedPages.length !== 25) throw new Error("Unclassified pages must always be sent to Pro.");
+  const tableContextRouting = selectTenderPagesForPro(pageClassifications, 1, 200, {
+    confidenceThreshold: 0.85,
+    contextRadius: 0,
+    tableContexts: [{
+      table_title: "Continued staff table",
+      header_page: 120,
+      first_data_page: 120,
+      last_data_page: 124,
+      columns: [{ header: "Staff", meaning: "position_title" }],
+      continues_after_chunk: false,
+    }],
+  });
+  [120, 121, 122, 123, 124].forEach((page) => {
+    if (!tableContextRouting.selectedPages.includes(page)) throw new Error(`Continued personnel table page ${page} must be routed to Pro extraction.`);
+  });
 
   const reconciledPages = reconcileTenderEvidencePages({
     tender_field_evidence: [{ field: "deadline", page_number: 94, quote: "Deadline for proposal submission is 8 January 2025" }],
