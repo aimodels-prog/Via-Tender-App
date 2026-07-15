@@ -126,12 +126,30 @@ export function cleanTenderRequirementText(value: any) {
   return deduped.join(" ").trim();
 }
 
+function looksLikeAcademicEducation(value: any) {
+  return /\b(?:master'?s?|bachelor'?s?|ph\.?\s*d|doctorate|degree|diploma|b\.?\s*sc|m\.?\s*sc|university|college|academic)\b/i.test(cleanTenderRequirementText(value));
+}
+
+function looksLikeProfessionalRegistration(value: any) {
+  return /\b(?:registered\/chartered|registered|chartered|practi[cs]ing\s+(?:certificate|licen[cs]e)|professional\s+(?:registration|membership|body|institution|association)|membership|licen[cs]e|certificate)\b/i.test(cleanTenderRequirementText(value));
+}
+
 function cleanTenderEducationRequirement(value: any) {
   const text = cleanTenderRequirementText(value)
     .replace(/^Education\s*:?\s*/i, "")
     .trim();
   if (/^\d{1,2}$/.test(text)) return "";
-  return text;
+  if (!text) return "";
+
+  const academicCandidate = text
+    .split(/\b(?:registered\/chartered|registered|chartered|valid\s+practi[cs]ing|professional\s+(?:registration|membership|body|institution|association)|membership|licen[cs]e|certificate)\b/i)[0]
+    .split(/\b(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen)\s*(?:\(\d{1,2}\)\s*)?years?\b/i)[0]
+    .replace(/\s*(?:;|,|-|and)\s*$/i, "")
+    .trim();
+
+  if (looksLikeAcademicEducation(academicCandidate)) return academicCandidate;
+  if (looksLikeAcademicEducation(text) && !looksLikeProfessionalRegistration(text)) return text;
+  return "";
 }
 
 function cleanTenderLocation(value: any) {
@@ -142,10 +160,23 @@ function cleanTenderLocation(value: any) {
   return text;
 }
 
-function canonicalTenderPositionTitle(value: any) {
-  let title = cleanTenderRequirementText(value)
-    .replace(/^\s*the\s+/i, "")
+function extractTenderSourcePositionNumber(value: any) {
+  const match = cleanTenderRequirementText(value).match(/^\s*K\s*[-.]?\s*(\d+)\s*[:.)-]?\s*/i);
+  return match ? Number(match[1]) : undefined;
+}
+
+function cleanTenderPositionTitle(value: any) {
+  return cleanTenderRequirementText(value)
     .replace(/^\s*K\s*[-.]?\s*\d+\s*[:.)-]?\s*/i, "")
+    .replace(/\s+\d{1,2}\s*$/i, "")
+    .replace(/\s*\/\s*/g, "/")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function canonicalTenderPositionTitle(value: any) {
+  let title = cleanTenderPositionTitle(value)
+    .replace(/^\s*the\s+/i, "")
     .replace(/\s*\((?:supervision|construction|design update|assistant resident engineer)\)\s*/gi, " ")
     .replace(/\bfor\s+(?:construction activities|design update|design)\b/gi, " ")
     .replace(/\bmaterials?\b/gi, "material")
@@ -181,6 +212,17 @@ function richerText(current: any, next: any) {
   if (!currentText) return nextText;
   if (!nextText) return currentText;
   return nextText.length > currentText.length ? nextText : currentText;
+}
+
+function richerEducationText(current: any, next: any) {
+  const currentText = cleanTenderEducationRequirement(current);
+  const nextText = cleanTenderEducationRequirement(next);
+  if (!currentText) return nextText;
+  if (!nextText) return currentText;
+  const currentAcademic = looksLikeAcademicEducation(currentText);
+  const nextAcademic = looksLikeAcademicEducation(nextText);
+  if (currentAcademic !== nextAcademic) return nextAcademic ? nextText : currentText;
+  return richerText(currentText, nextText);
 }
 
 function stricterExperienceText(current: any, next: any) {
@@ -281,6 +323,27 @@ function deriveMandatorySkills(position: any) {
   return mergeUniqueValues(existing, derived);
 }
 
+function deriveRequiredCertifications(position: any) {
+  const existing = toArray(position?.required_certifications);
+  const text = [
+    position?.minimum_education,
+    position?.general_experience,
+    position?.specific_experience,
+    position?.role_description,
+    ...existing,
+    ...(Array.isArray(position?.professional_memberships) ? position.professional_memberships : []),
+  ].map(cleanTenderRequirementText).filter(Boolean).join(" ");
+
+  const derived: string[] = [];
+  const registrationPhrase = text.match(/\bRegistered\/Chartered\s+Engineer\s+with\s+Valid\s+practi[cs]ing\s+certificate\b/i)?.[0];
+  if (registrationPhrase) derived.push(registrationPhrase);
+  else {
+    if (/\bregistered\/chartered\s+engineer\b/i.test(text)) derived.push("Registered/Chartered Engineer");
+    if (/\bvalid\s+practi[cs]ing\s+certificate\b/i.test(text)) derived.push("Valid practicing certificate");
+  }
+  return mergeUniqueValues(existing, derived);
+}
+
 function cleanTenderTitle(value: any) {
   let title = cleanTenderRequirementText(value)
     .replace(/\bNote:\s*.+$/i, "")
@@ -300,9 +363,10 @@ function cleanTenderTitle(value: any) {
 }
 
 export function normalizeTenderPosition(position: any, index = 0) {
-  const title = cleanTenderRequirementText(
+  const rawTitle = cleanTenderRequirementText(
     position?.position_title || position?.title || position?.role || position?.name || "",
   );
+  const title = cleanTenderPositionTitle(rawTitle);
   const id = position?.id || (title ? `pos_${title.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "")}` : `pos_${index}`);
 
   const rawQuantity = Number(position?.quantity ?? position?.qty);
@@ -334,13 +398,20 @@ export function normalizeTenderPosition(position: any, index = 0) {
     specific_experience: specificExperience,
     role_description: roleDescription,
   });
+  const requiredCertifications = deriveRequiredCertifications({
+    ...position,
+    minimum_education: education,
+    general_experience: generalExperience,
+    specific_experience: specificExperience,
+    role_description: roleDescription,
+  });
 
   return {
     ...position,
     id,
     position_title: title || `Position ${index + 1}`,
     quantity: Number.isFinite(rawQuantity) && rawQuantity > 0 ? rawQuantity : undefined,
-    source_position_number: Number.isInteger(Number(position?.source_position_number)) && Number(position.source_position_number) > 0 ? Number(position.source_position_number) : undefined,
+    source_position_number: Number.isInteger(Number(position?.source_position_number)) && Number(position.source_position_number) > 0 ? Number(position.source_position_number) : extractTenderSourcePositionNumber(rawTitle),
     source_document: cleanTenderRequirementText(position?.source_document || ""),
     lot_reference: cleanTenderRequirementText(position?.lot_reference || ""),
     expert_category: cleanTenderRequirementText(position?.expert_category || ""),
@@ -356,7 +427,7 @@ export function normalizeTenderPosition(position: any, index = 0) {
     required_sector_experience: toArray(position?.required_sector_experience),
     mandatory_skills: mandatorySkills,
     required_software: toArray(position?.required_software),
-    required_certifications: toArray(position?.required_certifications),
+    required_certifications: requiredCertifications,
     professional_memberships: toArray(position?.professional_memberships),
     required_languages: toArray(position?.required_languages),
     position_deliverables: toArray(position?.position_deliverables),
@@ -395,7 +466,7 @@ export function mergeTenderPositions(positions: any[]) {
       is_key_expert: current.is_key_expert ?? position.is_key_expert,
       input_months: current.input_months || position.input_months,
       work_location: richerText(current.work_location, position.work_location),
-      minimum_education: richerText(current.minimum_education, position.minimum_education),
+      minimum_education: richerEducationText(current.minimum_education, position.minimum_education),
       minimum_years_experience: Math.max(Number(current.minimum_years_experience || 0), Number(position.minimum_years_experience || 0)) || undefined,
       minimum_specific_years: Math.max(Number(current.minimum_specific_years || 0), Number(position.minimum_specific_years || 0)) || undefined,
       minimum_similar_projects: current.minimum_similar_projects || position.minimum_similar_projects,

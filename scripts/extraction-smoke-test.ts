@@ -222,15 +222,40 @@ async function main() {
         role_description: "Prepare survey work and advise the Team Leader on setting out the alignment.",
         source_page_numbers: [95],
       },
+      {
+        position_title: "K-8 Contract/Claims Expert",
+        source_page_numbers: [37],
+        source_quotes: ["K-8 Contract/Claims Expert"],
+      },
+      {
+        position_title: "Contract/Claims Expert",
+        source_page_numbers: [38],
+        source_quotes: ["Should have a minimum of a BSc Civil Engineering; Registered/Chartered Engineer with a valid practicing licence."],
+        minimum_education: "Should have a minimum of a BSc Civil Engineering; Registered/Chartered Engineer with a valid practicing licence.",
+        general_experience: "Minimum 10 years in contract administration and claims management.",
+      },
     ],
   });
-  if (segmentedRoleTender.positions.length !== 3) {
-    throw new Error(`Expected segmented role fragments to merge into 3 positions, got ${segmentedRoleTender.positions.length}.`);
+  if (segmentedRoleTender.positions.length !== 4) {
+    throw new Error(`Expected segmented role fragments to merge into 4 positions, got ${segmentedRoleTender.positions.length}.`);
   }
   const mergedHighwayRole = segmentedRoleTender.positions.find((position: any) => /Highway Design Engineer/i.test(position.position_title));
   if (!mergedHighwayRole?.minimum_education?.includes("Master")) throw new Error("Expected explicitly extracted education to survive role consolidation.");
   if (!mergedHighwayRole?.role_description?.includes("design review")) throw new Error("Expected detailed role duties to merge into the role-register entry.");
   if (!mergedHighwayRole?.general_experience?.includes("15 years")) throw new Error("Conflicting experience requirements must retain the stricter explicit minimum.");
+  const mergedClaimsRole = segmentedRoleTender.positions.find((position: any) => /Contract\/Claims Expert/i.test(position.position_title));
+  if (/^K-?8/i.test(mergedClaimsRole?.position_title || "")) {
+    throw new Error("Position title must not keep K-number prefixes after normalization.");
+  }
+  if (!mergedClaimsRole?.minimum_education?.includes("BSc Civil Engineering")) {
+    throw new Error("Contract/Claims Expert education from a continuation page must merge into the role.");
+  }
+  if (/registered|chartered|practi/i.test(mergedClaimsRole?.minimum_education || "")) {
+    throw new Error("Contract/Claims Expert registration/licence must not replace or pollute minimum_education.");
+  }
+  if (!mergedClaimsRole?.required_certifications?.some((item: string) => /Registered\/Chartered Engineer/i.test(item))) {
+    throw new Error("Contract/Claims Expert registration/licence must be preserved as certification.");
+  }
   if (segmentedRoleTender.extraction_warnings.some((warning: string) => /Education requirement was not extracted/i.test(warning))) {
     throw new Error(`Resolved position warnings must not survive later normalization passes: ${JSON.stringify(segmentedRoleTender.extraction_warnings)}`);
   }

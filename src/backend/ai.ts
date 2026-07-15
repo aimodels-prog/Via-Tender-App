@@ -1157,13 +1157,13 @@ export function extractTenderRoleContext(rawText: string, title: string, positio
 
   const windows: string[] = [];
   windows.push(...numberedWindows);
-  for (const index of hitIndexes.slice(0, 5)) {
+  for (const index of hitIndexes.slice(0, 30)) {
     const start = Math.max(0, index - 35);
     const end = Math.min(lines.length, index + 80);
     windows.push(lines.slice(start, end).join("\n"));
   }
   if (!windows.length) return "";
-  return Array.from(new Set(windows)).join("\n\n--- NEXT MATCH CONTEXT ---\n\n").slice(0, 14000);
+  return Array.from(new Set(windows)).join("\n\n--- NEXT MATCH CONTEXT ---\n\n").slice(0, 120000);
 }
 
 export function inferTenderTableContextsFromText(pageTexts: Array<{ page_number: number; text: string }>): TenderTableContext[] {
@@ -2342,7 +2342,7 @@ SEMANTIC FIELD CONTRACT:
 - position_title = occupational/job role only. Example: "K-1: Resident Engineer (1 No.)" becomes position_title "Resident Engineer", source_position_number 1, quantity 1.
 - source_position_number = hidden row/reference number such as the 1 in K-1. Never repeat K-1 in position_title.
 - quantity = number of people required, never part of position_title.
-- minimum_education = degree, diploma, academic discipline, registration, licence, or professional qualification requirements only.
+- minimum_education = degree, diploma, and academic discipline requirements only. Do NOT put registration, licences, chartership, practising certificates, or memberships here.
 - minimum_years_experience = overall minimum years as a number.
 - general_experience = broad professional or sector experience requirements.
 - specific_experience = role-, project-, country-, assignment-, or task-specific experience requirements.
