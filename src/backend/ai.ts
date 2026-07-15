@@ -1394,7 +1394,7 @@ FIELD DEFINITIONS:
 - input_months: staff effort/months/person-months for that role only.
 - work_location: place of assignment for that role only.
 - nationality_preference: explicit nationality/citizenship requirement only.
-- minimum_education: degrees, disciplines, academic qualifications, professional registration, licences, chartership, practising certificate, or required membership when written as a qualification.
+- minimum_education: degrees, disciplines, and academic qualifications only. Do NOT include professional registration, licences, chartership, or memberships here.
 - minimum_years_experience: the broad overall years requirement for the role.
 - general_experience: broad overall professional experience wording, including total years and seniority requirements.
 - specific_experience: role, project, sector, country, task, or similar-assignment experience wording.
