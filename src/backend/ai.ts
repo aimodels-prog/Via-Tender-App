@@ -232,7 +232,7 @@ const tenderSchema: Schema = {
           is_key_expert: { type: Type.BOOLEAN },
           input_months: { type: Type.NUMBER },
           work_location: { type: Type.STRING },
-          minimum_education: { type: Type.STRING, description: "Extract entire education requirement verbatim" },
+          minimum_education: { type: Type.STRING, description: "Extract the entire education, academic qualification, professional registration, and certification requirement block verbatim. Do not omit chartership or licences." },
           minimum_years_experience: { type: Type.INTEGER },
           minimum_specific_years: { type: Type.INTEGER },
           minimum_similar_projects: { type: Type.INTEGER },
@@ -1405,7 +1405,7 @@ FIELD DEFINITIONS:
 - input_months: staff effort/months/person-months for that role only.
 - work_location: place of assignment for that role only.
 - nationality_preference: explicit nationality/citizenship requirement only.
-- minimum_education: degrees, disciplines, and academic qualifications only. Do NOT include professional registration, licences, chartership, or memberships here.
+- minimum_education: degrees, disciplines, academic qualifications, AND professional registrations, licences, charterships, or memberships. Extract the full continuous text verbatim.
 - minimum_years_experience: the broad overall years requirement for the role.
 - general_experience: broad overall professional experience wording, including total years and seniority requirements.
 - specific_experience: role, project, sector, country, task, or similar-assignment experience wording.
@@ -1414,7 +1414,7 @@ FIELD DEFINITIONS:
 - required_sector_experience: named sector/domain experience such as roads, bridges, railway, water, buildings, transport planning, geotechnical, hydrology.
 - mandatory_skills: explicit non-software abilities or competencies only.
 - required_software: named software/tools only, such as AutoCAD, Primavera, MS Project, GIS, BIM.
-- required_certifications: licences, professional registration, chartership, permits, certificates.
+- required_certifications: specific licences or certificates (but also ensure these are captured in minimum_education so they are not lost).
 - professional_memberships: memberships in professional bodies or institutions.
 - required_languages: explicit language and proficiency requirements only.
 - regional_experience: regional or multi-country experience requirements.
@@ -2358,7 +2358,7 @@ SEMANTIC FIELD CONTRACT:
 - position_title = occupational/job role only. Example: "K-1: Resident Engineer (1 No.)" becomes position_title "Resident Engineer", source_position_number 1, quantity 1.
 - source_position_number = hidden row/reference number such as the 1 in K-1. Never repeat K-1 in position_title.
 - quantity = number of people required, never part of position_title.
-- minimum_education = degree, diploma, and academic discipline requirements only. Do NOT put registration, licences, chartership, practising certificates, or memberships here.
+- minimum_education = degree, diploma, academic discipline requirements, AND professional registration, licences, chartership, practising certificates, or memberships. Put the full qualification block here.
 - minimum_years_experience = overall minimum years as a number.
 - general_experience = broad professional or sector experience requirements.
 - specific_experience = role-, project-, country-, assignment-, or task-specific experience requirements.
@@ -2383,8 +2383,7 @@ SEMANTIC FIELD CONTRACT:
 
 REAL TENDER FIELD EXAMPLES:
 - "K-1: Senior Highway Design Engineer /Team Leader for Design Update 10" means source_position_number=1, position_title="Senior Highway Design Engineer / Team Leader for Design Update", evaluation_points=10. The "K-1" and "10" must not be part of the title.
-- "Registered/Chartered Engineer with Valid practising certificate" belongs in required_certifications or professional_memberships, not in required_languages or general_experience.
-- "Should have a minimum of a Master's Degree in Civil Engineering, Highways, Geotechnical Engineering" belongs in minimum_education.
+- "Registered/Chartered Engineer with Valid practising certificate" AND "Master's Degree in Civil Engineering, Highways, Geotechnical Engineering" MUST BOTH be extracted together into minimum_education.
 - "15 years post-graduate experience..." belongs in general_experience and minimum_years_experience=15. Role/project-specific parts such as "as Design Engineer" or "at least three projects of similar setting" belong in specific_experience / minimum_similar_projects.
 - "Staff Position Qualification" tables mean the first column is position_title and the qualification cell maps into minimum_education / certifications / experience depending on wording.
 - "Resident Engineer: One" means position_title="Resident Engineer" and quantity=1.
@@ -2731,8 +2730,7 @@ Field placement rules:
 - evaluation_points = numeric scoring points only; not quantity, years, months, or page numbers.
 Examples from the real tender formats:
 - "K-1: Senior Highway Design Engineer /Team Leader for Design Update 10" means source_position_number=1, position_title="Senior Highway Design Engineer / Team Leader for Design Update", evaluation_points=10.
-- "Registered/Chartered Engineer with Valid practising certificate" is a certification/registration requirement.
-- "Master's Degree in Civil Engineering, Highways, Geotechnical Engineering" is minimum_education.
+- "Master's Degree in Civil Engineering... ii) Registered/Chartered Engineer with Valid practising certificate" MUST BOTH be extracted into minimum_education as a single verbatim block.
 - "15 years post-graduate experience" is general_experience and minimum_years_experience=15.
 - "at least three projects of similar setting" is specific_experience and minimum_similar_projects=3.
 - "Resident Engineer: One" means quantity=1.
