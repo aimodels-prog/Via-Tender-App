@@ -75,6 +75,7 @@ export default function MatchResults() {
   const [adaptingId, setAdaptingId] = useState<string | null>(null);
   const [renderingId, setRenderingId] = useState<string | null>(null);
   const [targetLang, setTargetLang] = useState<Record<string, string>>({});
+  const [bulkTargetLang, setBulkTargetLang] = useState<string>("French");
   const [previewCv, setPreviewCv] = useState<any>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [cvToRegenerate, setCvToRegenerate] = useState<any>(null);
@@ -214,6 +215,88 @@ export default function MatchResults() {
     acc[tenderName][positionTitle].push(match);
     return acc;
   }, {});
+
+  const runBulkActionSequence = async (
+    actionName: string,
+    actionVerb: string,
+    actionFn: (cv: any) => Promise<void>
+  ) => {
+    if (isBulkGenerating) return;
+    const targets = filteredMatches.filter((m) => selectedMatchIds.has(m.id));
+    if (targets.length === 0) {
+      alert(`No matches selected for bulk ${actionName.toLowerCase()}.`);
+      return;
+    }
+    if (!confirm(`Are you sure you want to bulk ${actionName.toLowerCase()} ${targets.length} CVs?`)) return;
+
+    // Use a custom bulk generation task
+    const taskId = addTask({
+      type: "GENERATE",
+      title: `Bulk ${actionName} (${targets.length} CVs)`,
+      message: `Starting bulk ${actionName.toLowerCase()}...`,
+    });
+
+    try {
+      for (let i = 0; i < targets.length; i++) {
+        const match = targets[i];
+        updateTask(taskId, {
+          percent: Math.round((i / targets.length) * 100),
+          eta: (targets.length - i) * 15, // rough estimate
+          message: `${actionVerb} ${i + 1}/${targets.length}: ${match.expertName}`,
+        });
+
+        // Determine best CV explicitly for bulk
+        const cvsForMatch = cvs.filter(
+          (c: any) =>
+            c.expertId === match.expertId &&
+            (c.positionId === match.positionId || c.positionTitle === match.positionTitle)
+        );
+        let visualCv = cvsForMatch[cvsForMatch.length - 1] || match;
+        if (cvsForMatch.length > 0 && cvsForMatch.some((c: any) => c.customRichText)) {
+          visualCv = cvsForMatch.find((c: any) => c.customRichText) || visualCv;
+        }
+
+        await actionFn(visualCv);
+        await new Promise((r) => setTimeout(r, 500));
+      }
+
+      updateTask(taskId, {
+        status: "completed",
+        percent: 100,
+        eta: 0,
+        message: `Completed ${targets.length} CVs`,
+      });
+      api.getCVs().then(setCvs); // Refresh just in case
+      setSelectedMatchIds(new Set()); // Auto-clear selection after successful bulk action
+    } catch (err: any) {
+      console.error(err);
+      updateTask(taskId, { status: "error", message: err.message });
+      alert(`Bulk ${actionName.toLowerCase()} failed: ${err.message}`);
+    }
+  };
+
+  const handleBulkAdapt = () => runBulkActionSequence("Adapt", "Adapting", handleAdaptCV);
+  const handleBulkRender = () => runBulkActionSequence("Render", "Rendering", handleRenderCV);
+  const handleBulkWord = () => runBulkActionSequence("Word Export", "Exporting", handleDownloadDocx);
+  const handleBulkPdf = () => runBulkActionSequence("PDF Export", "Exporting", handleDownloadPdf);
+  
+  const handleBulkTranslate = async () => {
+    if (isBulkGenerating) return;
+    const targets = filteredMatches.filter((m) => selectedMatchIds.has(m.id));
+    if (targets.length === 0) return;
+    
+    // Auto-apply bulkTargetLang to targetLang state for these CVs so handleTranslateCV works seamlessly
+    const newTargetLang = { ...targetLang };
+    for (const match of targets) {
+      // Need ID to inject lang, but we use match.id as fallback for newly minted phantoms in handleTranslateCV
+      newTargetLang[match.id] = bulkTargetLang;
+    }
+    setTargetLang(newTargetLang);
+    
+    // We defer the execution slightly so the state has time to settle, or we just override the behavior.
+    // Actually, state updates are async, so let's just use runBulkActionSequence and we'll patch handleTranslateCV to accept a direct lang param.
+    // Wait, let's just add the direct lang parameter to handleTranslateCV!
+  };
 
   const handleBulkGenerate = async () => {
     if (isBulkGenerating) return;
@@ -529,8 +612,8 @@ export default function MatchResults() {
     }
   };
 
-  const handleTranslateCV = async (cv: any) => {
-    const lang = targetLang[cv.id];
+  const handleTranslateCV = async (cv: any, forceLang?: string) => {
+    const lang = forceLang || targetLang[cv.id];
     if (!lang) {
       alert("Please select a target language first.");
       return;
@@ -647,6 +730,8 @@ export default function MatchResults() {
       alert("Regeneration failed: " + err.message);
     }
   };
+
+  const handleBulkTranslateAction = () => runBulkActionSequence("Translate", "Translating", (cv) => handleTranslateCV(cv, bulkTargetLang));
 
   const handleDownloadDocx = async (cv: any) => {
     try {
@@ -1778,6 +1863,102 @@ export default function MatchResults() {
               )}
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+
+      {/* FLOATING ACTION BAR FOR BULK ACTIONS */}
+      <AnimatePresence>
+        {selectedMatchIds.size > 0 && (
+          <motion.div
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-white border border-slate-200 shadow-2xl rounded-2xl p-2 flex items-center gap-2"
+          >
+            <div className="px-4 py-2 bg-blue-50 text-blue-700 font-bold text-sm rounded-xl shrink-0">
+              {selectedMatchIds.size} Selected
+            </div>
+            
+            <div className="w-px h-8 bg-slate-200 mx-2"></div>
+            
+            <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl border border-slate-100">
+              <span className="text-xs font-semibold text-slate-500 uppercase px-2">Generate:</span>
+              <button
+                onClick={handleBulkGenerate}
+                disabled={isBulkGenerating}
+                className="px-4 py-2 hover:bg-white hover:shadow-sm rounded-lg text-sm font-semibold text-slate-700 transition-all disabled:opacity-50"
+              >
+                Normal
+              </button>
+              <button
+                onClick={handleBulkAdapt}
+                disabled={isBulkGenerating}
+                className="px-4 py-2 hover:bg-white hover:shadow-sm rounded-lg text-sm font-semibold text-emerald-600 transition-all disabled:opacity-50"
+              >
+                Adapt
+              </button>
+              <button
+                onClick={handleBulkRender}
+                disabled={isBulkGenerating}
+                className="px-4 py-2 hover:bg-white hover:shadow-sm rounded-lg text-sm font-semibold text-purple-600 transition-all disabled:opacity-50"
+              >
+                Render
+              </button>
+            </div>
+
+            <div className="w-px h-8 bg-slate-200 mx-2"></div>
+
+            <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl border border-slate-100">
+              <span className="text-xs font-semibold text-slate-500 uppercase px-2">Export:</span>
+              <button
+                onClick={handleBulkWord}
+                disabled={isBulkGenerating}
+                className="flex items-center gap-1.5 px-4 py-2 hover:bg-blue-600 hover:text-white rounded-lg text-sm font-semibold text-blue-600 transition-all disabled:opacity-50"
+              >
+                <FileText size={16} /> Word
+              </button>
+              <button
+                onClick={handleBulkPdf}
+                disabled={isBulkGenerating}
+                className="flex items-center gap-1.5 px-4 py-2 hover:bg-red-600 hover:text-white rounded-lg text-sm font-semibold text-red-600 transition-all disabled:opacity-50"
+              >
+                <Download size={16} /> PDF
+              </button>
+            </div>
+
+            <div className="w-px h-8 bg-slate-200 mx-2"></div>
+
+            <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-xl border border-slate-100">
+              <select
+                value={bulkTargetLang}
+                onChange={(e) => setBulkTargetLang(e.target.value)}
+                className="bg-white border-slate-200 text-sm rounded-lg px-3 py-2 text-slate-700 focus:ring-blue-500 font-medium"
+              >
+                <option value="French">French</option>
+                <option value="Spanish">Spanish</option>
+                <option value="Russian">Russian</option>
+                <option value="Arabic">Arabic</option>
+                <option value="Portuguese">Portuguese</option>
+                <option value="Serbian">Serbian</option>
+                <option value="Romanian">Romanian</option>
+                <option value="Georgian">Georgian</option>
+              </select>
+              <button
+                onClick={handleBulkTranslateAction}
+                disabled={isBulkGenerating}
+                className="flex items-center gap-1.5 px-4 py-2 hover:bg-amber-500 hover:text-white rounded-lg text-sm font-semibold text-amber-600 transition-all disabled:opacity-50"
+              >
+                <Globe size={16} /> Translate
+              </button>
+            </div>
+            
+            <button 
+              onClick={() => setSelectedMatchIds(new Set())}
+              className="ml-2 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
+            >
+              <X size={20} />
+            </button>
+          </motion.div>
         )}
       </AnimatePresence>
     </div>
