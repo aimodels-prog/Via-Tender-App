@@ -874,7 +874,7 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
     const nextText = cleanTenderLine(next);
     if (!currentText) return nextText;
     if (!nextText) return currentText;
-    return nextText.length > currentText.length * 1.25 ? nextText : currentText;
+    return nextText.length > currentText.length ? nextText : currentText;
   };
   const strictestText = (current: any, next: any) => {
     const currentText = cleanTenderLine(current);
@@ -1681,6 +1681,11 @@ export async function runParseTenderText(text: string): Promise<any> {
   18. Output only valid JSON matching the schema. Never include internal reasoning, commentary, "Wait", "I will", "Let me", page markers, "Official Use Only", icon bullets, or explanation text inside any field.
   
   EXTRACT ABSOLUTELY EVERYTHING. IF YOU THINK A DETAIL IS NOT IMPORTANT, EXTRACT IT ANYWAY. CAPTURE ALL REQUIREMENTS.
+
+  CRITICAL VERBATIM RULES:
+  - You MUST extract the verbatim text for education and experience requirements. Do not paraphrase or shorten. Copy the exact tender wording for minimum_education, general_experience, and specific_experience.
+  - Non-key/support staff and technician roles are REAL positions when the tender requires them. Extract Senior Laboratory Technician, Laboratory Technician, Assistant Laboratory Technician, Materials Technician, CAD Specialist/Technician, inspectors, survey assistants, and similar staff when they appear in a staff schedule, qualification table, evaluation table, or requirement paragraph.
+  - SUPPORT STAFF ARE STILL REAL ROLES: Do not drop technician, inspector, CAD, laboratory, survey assistant, or other non-key/support positions when they have education, experience, quantity, input months, or staff schedule evidence.
 
   Tender Text(s):
   ${tenderText}`;
