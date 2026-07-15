@@ -64,6 +64,9 @@ export default function MatchResults() {
   const [expandedTenders, setExpandedTenders] = useState<Set<string>>(
     new Set(),
   );
+  const [selectedMatchIds, setSelectedMatchIds] = useState<Set<string>>(
+    new Set()
+  );
   
   // CV Actions states
   const [allExperts, setAllExperts] = useState<any[]>([]);
@@ -121,6 +124,38 @@ export default function MatchResults() {
   const handleDeleteMatch = async (id: string) => {
     await api.deleteMatch(id);
     fetchMatches();
+  };
+
+  const toggleMatchSelection = (matchId: string) => {
+    const newSelected = new Set(selectedMatchIds);
+    if (newSelected.has(matchId)) {
+      newSelected.delete(matchId);
+    } else {
+      newSelected.add(matchId);
+    }
+    setSelectedMatchIds(newSelected);
+  };
+
+  const togglePositionSelection = (positionMatches: any[]) => {
+    const allSelected = positionMatches.every((m: any) => selectedMatchIds.has(m.id));
+    const newSelected = new Set(selectedMatchIds);
+    if (allSelected) {
+      positionMatches.forEach((m: any) => newSelected.delete(m.id));
+    } else {
+      positionMatches.forEach((m: any) => newSelected.add(m.id));
+    }
+    setSelectedMatchIds(newSelected);
+  };
+
+  const toggleTenderSelection = (tenderMatches: any[]) => {
+    const allSelected = tenderMatches.every((m: any) => selectedMatchIds.has(m.id));
+    const newSelected = new Set(selectedMatchIds);
+    if (allSelected) {
+      tenderMatches.forEach((m: any) => newSelected.delete(m.id));
+    } else {
+      tenderMatches.forEach((m: any) => newSelected.add(m.id));
+    }
+    setSelectedMatchIds(newSelected);
   };
 
   const toggleTender = (tenderName: string) => {
@@ -182,10 +217,10 @@ export default function MatchResults() {
 
   const handleBulkGenerate = async () => {
     if (isBulkGenerating) return;
-    const targets = filteredMatches.filter((m) => m.accepted === true); // Only bulk generate accepted matches
+    const targets = filteredMatches.filter((m) => selectedMatchIds.has(m.id));
     if (targets.length === 0) {
       alert(
-        "No accepted matches found for bulk generation. Please accept a match first.",
+        "No matches selected for bulk generation. Please check the boxes next to the candidates you want to compile.",
       );
       return;
     }
@@ -896,6 +931,22 @@ export default function MatchResults() {
                     )}
                   >
                     <div className="flex items-center gap-3 sm:gap-4 flex-1 min-w-0">
+                      <div className="flex items-center justify-center shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          className="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          checked={Object.values(positions).flatMap((p: any) => p).every((m: any) => selectedMatchIds.has(m.id))}
+                          ref={(input) => {
+                            if (input) {
+                              const matches = Object.values(positions).flatMap((p: any) => p);
+                              const someSelected = matches.some((m: any) => selectedMatchIds.has(m.id));
+                              const allSelected = matches.every((m: any) => selectedMatchIds.has(m.id));
+                              input.indeterminate = someSelected && !allSelected;
+                            }
+                          }}
+                          onChange={() => toggleTenderSelection(Object.values(positions).flatMap((p: any) => p))}
+                        />
+                      </div>
                       <div
                         className={clsx(
                           "w-10 h-10 rounded-lg flex items-center justify-center transition-colors shrink-0",
@@ -1039,6 +1090,21 @@ export default function MatchResults() {
                                     )}
                                   >
                                     <div className="flex items-center gap-3 flex-1 min-w-0 w-full">
+                                      <div className="flex items-center justify-center shrink-0" onClick={(e) => e.stopPropagation()}>
+                                        <input
+                                          type="checkbox"
+                                          className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                          checked={positionMatches.every((m: any) => selectedMatchIds.has(m.id))}
+                                          ref={(input) => {
+                                            if (input) {
+                                              const someSelected = positionMatches.some((m: any) => selectedMatchIds.has(m.id));
+                                              const allSelected = positionMatches.every((m: any) => selectedMatchIds.has(m.id));
+                                              input.indeterminate = someSelected && !allSelected;
+                                            }
+                                          }}
+                                          onChange={() => togglePositionSelection(positionMatches)}
+                                        />
+                                      </div>
                                       <div
                                         className={clsx(
                                           "w-8 h-8 rounded-lg flex items-center justify-center transition-colors shrink-0",
@@ -1096,6 +1162,21 @@ export default function MatchResults() {
     <table className="w-full text-left border-collapse bg-white">
       <thead className="bg-[#f8fafc] border-b border-slate-200">
         <tr>
+          <th className="px-4 py-3 w-10">
+            <input
+              type="checkbox"
+              className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+              checked={positionMatches.every((m: any) => selectedMatchIds.has(m.id))}
+              ref={(input) => {
+                if (input) {
+                  const someSelected = positionMatches.some((m: any) => selectedMatchIds.has(m.id));
+                  const allSelected = positionMatches.every((m: any) => selectedMatchIds.has(m.id));
+                  input.indeterminate = someSelected && !allSelected;
+                }
+              }}
+              onChange={() => togglePositionSelection(positionMatches)}
+            />
+          </th>
           <th className="px-6 py-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">Score</th>
           <th className="px-6 py-3 text-[10px] font-bold uppercase tracking-wider text-slate-500">Candidate</th>
           <th className="px-6 py-3 text-[10px] font-bold uppercase tracking-wider text-slate-500 hidden md:table-cell">Location</th>
@@ -1126,6 +1207,14 @@ export default function MatchResults() {
                   setExpandedMatchId(isMatchExpanded ? null : match.id);
                 }}
               >
+                <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                    checked={selectedMatchIds.has(match.id)}
+                    onChange={() => toggleMatchSelection(match.id)}
+                  />
+                </td>
                 <td className="px-6 py-4 whitespace-nowrap">
                   <div className="flex items-center gap-2">
                     <div className={clsx("font-bold text-lg", match.score >= 85 ? "text-emerald-600" : match.score >= 50 ? "text-blue-600" : "text-amber-600")}>
@@ -1153,7 +1242,7 @@ export default function MatchResults() {
               <AnimatePresence>
                 {isMatchExpanded && (
                   <tr>
-                    <td colSpan={6} className="p-0 border-0">
+                    <td colSpan={7} className="p-0 border-0">
 
                       <motion.div
                         initial={{ height: 0, opacity: 0 }}
