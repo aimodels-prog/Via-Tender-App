@@ -1121,6 +1121,13 @@ export function extractTenderRoleContext(rawText: string, title: string, positio
     .filter(Boolean);
   const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const titleWords = normalizedTitle.split(/\s+/).filter((word) => word.length > 2);
+  const aliases = Array.from(new Set([
+    normalizedTitle,
+    ...title.split(/[\/(),;]+|\b(?:\s+or\s+|\s+-\s+)\b/gi)
+      .map((s) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim())
+      .filter((s) => s.split(/\s+/).length >= 2 || s.length > 8)
+  ]));
+
   const numberedWindows: string[] = [];
   if (positionNumber) {
     const numberedIndexes = lines
@@ -1133,7 +1140,8 @@ export function extractTenderRoleContext(rawText: string, title: string, positio
         const hasRequirementMarkers = /\b(?:bachelor|master|postgraduate|degree|experience|professional registration|chartered|registered)\b/i.test(rawWindow);
         const lineHasTitleWord = titleWords.some((word) => lineKey.includes(word));
         const windowHasAllTitleWords = titleWords.every((word) => window.includes(word));
-        return windowHasAllTitleWords || (lineHasTitleWord && hasRequirementMarkers);
+        const windowHasAlias = aliases.some(alias => window.includes(alias));
+        return windowHasAlias || windowHasAllTitleWords || (lineHasTitleWord && hasRequirementMarkers);
       })
       .map(({ index }) => index);
 
@@ -1153,7 +1161,7 @@ export function extractTenderRoleContext(rawText: string, title: string, positio
 
   const hitIndexes = lines
     .map((line, index) => ({ line, index, normalized: line.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() }))
-    .filter(({ normalized }) => normalized.includes(normalizedTitle) || titleWords.every((word) => normalized.includes(word)))
+    .filter(({ normalized }) => aliases.some(alias => normalized.includes(alias)) || titleWords.every((word) => normalized.includes(word)))
     .map(({ index }) => index);
 
   const windows: string[] = [];
