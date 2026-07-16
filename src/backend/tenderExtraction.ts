@@ -16,17 +16,6 @@ type TenderPage = {
   readable: boolean;
 };
 
-type TenderEvidence = { field: string; page_number: number; quote: string };
-
-const evidenceSchema: Schema = {
-  type: Type.OBJECT,
-  properties: {
-    field: { type: Type.STRING },
-    page_number: { type: Type.INTEGER },
-    quote: { type: Type.STRING },
-  },
-};
-
 const positionSchema: Schema = {
   type: Type.OBJECT,
   properties: {
@@ -61,8 +50,6 @@ const positionSchema: Schema = {
     position_deliverables: { type: Type.ARRAY, items: { type: Type.STRING } },
     evaluation_points: { type: Type.NUMBER },
     source_page_numbers: { type: Type.ARRAY, items: { type: Type.INTEGER } },
-    source_quotes: { type: Type.ARRAY, items: { type: Type.STRING } },
-    field_evidence: { type: Type.ARRAY, items: evidenceSchema },
   },
 };
 
@@ -85,7 +72,6 @@ const tenderSchema: Schema = {
     duration: { type: Type.STRING },
     special_requirements: { type: Type.ARRAY, items: { type: Type.STRING } },
     global_team_constraints: { type: Type.ARRAY, items: { type: Type.STRING } },
-    tender_field_evidence: { type: Type.ARRAY, items: evidenceSchema },
     positions: { type: Type.ARRAY, items: positionSchema },
   },
 };
@@ -126,8 +112,8 @@ COMPLETENESS RULES
 3. The same role may appear in a staff schedule, evaluation table, qualification table, input schedule, and TOR duties. Merge all available facts into one role without changing their meaning.
 4. Keep exact requirement wording after only repairing broken line wraps and obvious OCR spacing. Do not infer requirements from the country, donor, sector, or job title.
 5. Missing means absent: omit numeric values and use empty strings/arrays. Never use 0, 1, "Any", or "Not stated" as invented defaults.
-6. Attach physical page numbers and short verbatim quotes. Every populated core fact should have field_evidence using the exact schema field name.
-7. Read all supplied pages before producing JSON. Output JSON only.`;
+6. Attach physical page numbers in source_page_numbers. Do not output source quotes, evidence objects, commentary, reasoning, or duplicated copies of the same fact.
+7. Keep the JSON compact. Each requirement belongs in its correct field once. Read all supplied pages before producing JSON and output JSON only.`;
 
 const RELEVANCE_TERMS = [
   /request for proposals?|letter of invitation|invitation to (?:bid|tender)|data sheet|submission deadline|deadline for submission|proposal submission date|date and time.*submission/i,
@@ -162,6 +148,17 @@ function parseJson(text: string) {
   return JSON.parse(cleaned || "{}");
 }
 
+function incompleteJsonError(error: any, responseLength = 0) {
+  const wrapped: any = new Error(`Gemini returned incomplete JSON (${responseLength} characters). The extraction will be retried in smaller batches.`);
+  wrapped.code = "TENDER_INCOMPLETE_JSON";
+  wrapped.cause = error;
+  return wrapped;
+}
+
+function isIncompleteJsonError(error: any) {
+  return error?.code === "TENDER_INCOMPLETE_JSON";
+}
+
 function isRetryable(error: any) {
   const message = String(error?.message || error || "");
   return error?.status === 429 || error?.status === 503 || /429|503|temporar|high demand|unavailable/i.test(message);
@@ -175,11 +172,22 @@ async function generateJson(prompt: string, schema: Schema, parts?: any[]) {
         const response = await getAI().models.generateContent({
           model,
           contents: [{ role: "user", parts: parts || [{ text: prompt }] }],
-          config: { responseMimeType: "application/json", responseSchema: schema, temperature: 0 },
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: schema,
+            temperature: 0,
+            maxOutputTokens: Math.max(4096, Number(process.env.TENDER_EXTRACTION_MAX_OUTPUT_TOKENS || 32768)),
+          },
         });
-        return parseJson(response.text || "{}");
+        const responseText = response.text || "{}";
+        try {
+          return parseJson(responseText);
+        } catch (error) {
+          throw incompleteJsonError(error, responseText.length);
+        }
       } catch (error: any) {
         lastError = error;
+        if (isIncompleteJsonError(error)) throw error;
         if (!isRetryable(error) || attempt === 1) break;
         await new Promise((resolve) => setTimeout(resolve, 1200 * (attempt + 1)));
       }
@@ -215,22 +223,6 @@ function uniqueStrings(values: any[]) {
   });
 }
 
-function uniqueEvidence(values: TenderEvidence[]) {
-  const seen = new Set<string>();
-  return values.filter((item) => {
-    const field = cleanText(item?.field);
-    const quote = cleanText(item?.quote);
-    const page = Number(item?.page_number || 0);
-    const key = `${field.toLowerCase()}|${page}|${quote.toLowerCase()}`;
-    if (!field || !quote || page < 1 || seen.has(key)) return false;
-    seen.add(key);
-    item.field = field;
-    item.quote = quote;
-    item.page_number = page;
-    return true;
-  });
-}
-
 function cleanRoleTitle(value: any) {
   return cleanText(value)
     .replace(/^\s*(?:position\s+)?K\s*[-.:]?\s*\d+\s*[:.)-]?\s*/i, "")
@@ -259,7 +251,7 @@ function richerText(left: any, right: any) {
 function mergePosition(left: any, right: any) {
   const arrays = [
     "required_sector_experience", "mandatory_skills", "required_software", "required_certifications",
-    "professional_memberships", "required_languages", "required_keywords", "position_deliverables", "source_quotes",
+    "professional_memberships", "required_languages", "required_keywords", "position_deliverables",
   ];
   const textFields = [
     "source_document", "lot_reference", "expert_category", "work_location", "minimum_education",
@@ -269,8 +261,7 @@ function mergePosition(left: any, right: any) {
   const merged = { ...left, ...right, position_title: cleanRoleTitle(right.position_title || left.position_title) };
   textFields.forEach((field) => { merged[field] = richerText(left?.[field], right?.[field]); });
   arrays.forEach((field) => { merged[field] = uniqueStrings([...(left?.[field] || []), ...(right?.[field] || [])]); });
-  merged.field_evidence = uniqueEvidence([...(left?.field_evidence || []), ...(right?.field_evidence || [])]);
-  merged.source_page_numbers = Array.from(new Set([...(left?.source_page_numbers || []), ...(right?.source_page_numbers || []), ...merged.field_evidence.map((item: any) => item.page_number)]))
+  merged.source_page_numbers = Array.from(new Set([...(left?.source_page_numbers || []), ...(right?.source_page_numbers || [])]))
     .map(Number).filter((page) => page > 0).sort((a, b) => a - b);
   merged.quantity = right?.quantity ?? left?.quantity;
   merged.input_months = right?.input_months ?? left?.input_months;
@@ -297,7 +288,6 @@ export function mergeTenderResults(results: any[]) {
     metadataFields.forEach((field) => { if (!cleanText(output[field]) && cleanText(item[field])) output[field] = cleanText(item[field]); });
     output.scope_summary = richerText(output.scope_summary, item.scope_summary);
     arrayFields.forEach((field) => { output[field] = uniqueStrings([...(output[field] || []), ...(item[field] || [])]); });
-    output.tender_field_evidence = uniqueEvidence([...(output.tender_field_evidence || []), ...(item.tender_field_evidence || [])]);
     (Array.isArray(item.positions) ? item.positions : []).forEach((raw: any) => {
       const position = { ...raw, position_title: cleanRoleTitle(raw?.position_title) };
       if (!position.position_title) return;
@@ -377,7 +367,7 @@ function pagesToText(pages: TenderPage[]) {
   return pages.map((page) => `--- DOCUMENT: ${page.document_name} | PHYSICAL PAGE: ${page.page_number} | DOCUMENT PAGE: ${page.document_page_number} ---\n${page.text}`).join("\n\n");
 }
 
-function chunkPages(pages: TenderPage[], maxChars = Number(process.env.TENDER_EXTRACTION_CHUNK_CHARS || 55000)) {
+function chunkPages(pages: TenderPage[], maxChars = Number(process.env.TENDER_EXTRACTION_CHUNK_CHARS || 35000)) {
   const chunks: TenderPage[][] = [];
   let current: TenderPage[] = [];
   let length = 0;
@@ -461,7 +451,7 @@ async function extractUnreadablePages(files: TenderPdfInput[], pages: TenderPage
       if (!weak.length) continue;
 
       const batches: TenderPage[][] = [];
-      for (let index = 0; index < weak.length; index += 20) batches.push(weak.slice(index, index + 20));
+      for (let index = 0; index < weak.length; index += 8) batches.push(weak.slice(index, index + 8));
       for (const batch of batches) {
         const pdf = await PDFDocument.create();
         const copied = await pdf.copyPages(source, batch.map((page) => page.document_page_number - 1));
@@ -505,14 +495,59 @@ function completenessWarnings(tender: any) {
   return warnings;
 }
 
+async function extractPageBatch(pages: TenderPage[], label: string): Promise<any> {
+  const prompt = `${CORE_PROMPT}\n\n${label}. Extract all tender-level facts and every required staff position visible here. Preserve table continuation context within the supplied pages.\n\n${pagesToText(pages)}`;
+  try {
+    return await generateJson(prompt, tenderSchema);
+  } catch (error) {
+    if (!isIncompleteJsonError(error) || pages.length <= 1) throw error;
+    const middle = Math.ceil(pages.length / 2);
+    const [left, right] = await Promise.all([
+      extractPageBatch(pages.slice(0, middle), `${label}, first half`),
+      extractPageBatch(pages.slice(middle), `${label}, second half`),
+    ]);
+    return mergeTenderResults([left, right]);
+  }
+}
+
+async function extractRoleBatch(batch: Array<{ position: any; pages: TenderPage[] }>, label: string): Promise<any> {
+  const contexts = batch.map(({ position, pages: rolePages }) => `=== ROLE TO COMPLETE ===\n${JSON.stringify({
+    position_title: position.position_title,
+    source_position_number: position.source_position_number,
+    lot_reference: position.lot_reference,
+    current_values: position,
+  })}\n=== EVERY MATCHING SOURCE PAGE ===\n${pagesToText(rolePages)}`).join("\n\n");
+  const prompt = `${CORE_PROMPT}\n\n${label}: Complete ONLY the listed roles. Search every supplied occurrence and nearby page, including continued rows. Preserve current correct values, add every available missing requirement, and never transfer facts between roles. If duties truly are not separately stated after this search, set role_duties_status to not_stated.\n\n${contexts}`;
+  try {
+    return await generateJson(prompt, roleDetailSchema);
+  } catch (error) {
+    if (!isIncompleteJsonError(error)) throw error;
+    if (batch.length > 1) {
+      const middle = Math.ceil(batch.length / 2);
+      const [left, right] = await Promise.all([
+        extractRoleBatch(batch.slice(0, middle), `${label}, first role group`),
+        extractRoleBatch(batch.slice(middle), `${label}, second role group`),
+      ]);
+      return mergeTenderResults([left, right]);
+    }
+    const only = batch[0];
+    if (!only || only.pages.length <= 1) throw error;
+    const middle = Math.ceil(only.pages.length / 2);
+    const [left, right] = await Promise.all([
+      extractRoleBatch([{ ...only, pages: only.pages.slice(0, middle) }], `${label}, first source-page group`),
+      extractRoleBatch([{ ...only, pages: only.pages.slice(middle) }], `${label}, second source-page group`),
+    ]);
+    return mergeTenderResults([left, right]);
+  }
+}
+
 async function runPipeline(pages: TenderPage[], visualResults: any[] = []) {
   const readablePages = pages.filter((page) => page.readable);
   const relevantPages = selectRelevantTenderPages(readablePages);
   const chunks = chunkPages(relevantPages);
   const concurrency = Math.max(1, Math.min(4, Number(process.env.TENDER_EXTRACTION_CONCURRENCY || 2)));
   const initialResults = await mapWithConcurrency(chunks, concurrency, async (chunk, index) => {
-    const prompt = `${CORE_PROMPT}\n\nThis is relevant page chunk ${index + 1} of ${chunks.length}. Extract all tender-level facts and every required staff position visible here. Preserve table continuation context within the supplied pages.\n\n${pagesToText(chunk)}`;
-    return generateJson(prompt, tenderSchema);
+    return extractPageBatch(chunk, `Relevant page chunk ${index + 1} of ${chunks.length}`);
   });
 
   let merged = mergeTenderResults([...initialResults, ...visualResults]);
@@ -533,14 +568,7 @@ async function runPipeline(pages: TenderPage[], visualResults: any[] = []) {
   if (current.length) roleBatches.push(current);
 
   const detailResults = await mapWithConcurrency(roleBatches, concurrency, async (batch, index) => {
-    const contexts = batch.map(({ position, pages: rolePages }) => `=== ROLE TO COMPLETE ===\n${JSON.stringify({
-      position_title: position.position_title,
-      source_position_number: position.source_position_number,
-      lot_reference: position.lot_reference,
-      current_values: position,
-    })}\n=== EVERY MATCHING SOURCE PAGE ===\n${pagesToText(rolePages)}`).join("\n\n");
-    const prompt = `${CORE_PROMPT}\n\nFULL-DOCUMENT ROLE SEARCH ${index + 1}/${roleBatches.length}: Complete ONLY the listed roles. Search every supplied occurrence and nearby page, including continued rows. Preserve current correct values, add every available missing requirement, and never transfer facts between roles. If duties truly are not separately stated after this search, set role_duties_status to not_stated.\n\n${contexts}`;
-    return generateJson(prompt, roleDetailSchema);
+    return extractRoleBatch(batch, `Full-document role search ${index + 1} of ${roleBatches.length}`);
   });
   merged = mergeTenderResults([merged, ...detailResults]);
 
