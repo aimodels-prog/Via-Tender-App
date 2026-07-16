@@ -85,6 +85,53 @@ function sanitizeHtml2CanvasColors(clonedDocument: Document) {
   });
 }
 
+function applyLegacyDocumentColorOverrides() {
+  const root = document.documentElement;
+  const computed = window.getComputedStyle(root);
+  const previousValues: Array<{ property: string; value: string; priority: string }> = [];
+  const customProperties = new Set<string>();
+
+  for (let index = 0; index < computed.length; index += 1) {
+    const property = computed.item(index);
+    if (property.startsWith('--')) customProperties.add(property);
+  }
+  const collectRuleProperties = (rules: CSSRuleList) => {
+    Array.from(rules).forEach((rule) => {
+      if (rule instanceof CSSStyleRule) {
+        Array.from(rule.style).forEach((property) => {
+          if (property.startsWith('--')) customProperties.add(property);
+        });
+      }
+      if ('cssRules' in rule) collectRuleProperties((rule as CSSGroupingRule).cssRules);
+    });
+  };
+  Array.from(document.styleSheets).forEach((sheet) => {
+    try {
+      if (sheet.cssRules) collectRuleProperties(sheet.cssRules);
+    } catch {
+      // Cross-origin stylesheets cannot be inspected; their computed values are handled in onclone.
+    }
+  });
+
+  customProperties.forEach((property) => {
+    const value = computed.getPropertyValue(property).trim();
+    if (!/oklch\(|oklab\(/i.test(value)) return;
+    previousValues.push({
+      property,
+      value: root.style.getPropertyValue(property),
+      priority: root.style.getPropertyPriority(property),
+    });
+    root.style.setProperty(property, convertModernColor(value), 'important');
+  });
+
+  return () => {
+    previousValues.forEach(({ property, value, priority }) => {
+      if (value) root.style.setProperty(property, value, priority);
+      else root.style.removeProperty(property);
+    });
+  };
+}
+
 export async function downloadHtmlAsPdf(htmlContent: string, filename: string, asBlob: boolean = false) {
   const element = document.createElement('div');
   element.innerHTML = htmlContent;
@@ -92,6 +139,10 @@ export async function downloadHtmlAsPdf(htmlContent: string, filename: string, a
   element.style.fontFamily = 'Arial, sans-serif';
   element.style.color = '#111827';
   element.style.backgroundColor = '#ffffff';
+  element.querySelectorAll<HTMLElement>('[style]').forEach((child) => {
+    const inlineStyle = child.getAttribute('style') || '';
+    if (/oklch\(|oklab\(/i.test(inlineStyle)) child.setAttribute('style', convertModernColor(inlineStyle));
+  });
   
   const opt: any = {
     margin:       10,
@@ -105,10 +156,14 @@ export async function downloadHtmlAsPdf(htmlContent: string, filename: string, a
     jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
   };
 
-  if (asBlob) {
-    return html2pdf().set(opt).from(element).output('blob');
-  } else {
-    return html2pdf().set(opt).from(element).save();
+  const restoreDocumentColors = applyLegacyDocumentColorOverrides();
+  try {
+    if (asBlob) {
+      return await html2pdf().set(opt).from(element).output('blob');
+    }
+    return await html2pdf().set(opt).from(element).save();
+  } finally {
+    restoreDocumentColors();
   }
 }
 
