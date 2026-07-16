@@ -4,7 +4,7 @@ import { PDFParse } from "pdf-parse";
 import { extractNumberedExpertQualificationRows, extractUniversalCVFacts, extractUniversalTenderFacts } from "../src/lib/universalExtraction.ts";
 import { normalizeExpertCollections, postProcessExtractedExpert } from "../src/lib/cvPostProcess.ts";
 import { normalizeTenderRecord } from "../src/lib/tenderPostProcess.ts";
-import { enrichTenderExtractionFromSourceText, extractTenderRoleContext, getTenderTableContextsForRange, inferTenderTableContextsFromText, mergeTenderExtractions, reconcileTenderEvidencePages, selectTenderPagesForPro, validateTenderFieldSemantics } from "../src/backend/ai.ts";
+import { buildTenderFieldCoverage, enrichTenderExtractionFromSourceText, extractTenderRoleContext, getTenderTableContextsForRange, inferTenderTableContextsFromText, mergeTenderExtractions, reconcileTenderEvidencePages, selectTenderPagesForPro, validateTenderFieldSemantics } from "../src/backend/ai.ts";
 
 async function readDocxText(path: string) {
   const result = await mammoth.extractRawText({ buffer: fs.readFileSync(path) });
@@ -106,6 +106,52 @@ The registration body must be internationally recognised.
   const enrichedRailwayRole = enrichedRailway.positions[0];
   if (enrichedRailwayRole.quantity !== undefined || enrichedRailwayRole.input_months !== 9 || !enrichedRailwayRole.is_key_expert) {
     throw new Error("Source-text enrichment did not correct quantity, input months, and key-expert status.");
+  }
+  const secondRailwayRole = `
+6. Railway Rolling Stock Expert
+Education:
+• Bachelor's degree in Mechanical Engineering or Electrical Engineering
+Experience:
+• Twelve (12) years of professional railway rolling-stock experience
+• Experience as rolling-stock expert on two (2) railway feasibility studies
+Professional Registration
+• Must be a Registered Engineer.
+12`;
+  const reconciledRailway = enrichTenderExtractionFromSourceText(
+    { positions: [enrichedRailwayRole] },
+    `${railwayQualificationTable}\n${secondRailwayRole}`,
+    [{ page_number: 106, text: railwayQualificationTable }, { page_number: 107, text: secondRailwayRole }],
+  );
+  if (!reconciledRailway.positions.some((position: any) => position.position_title === "Railway Rolling Stock Expert")) {
+    throw new Error("Source role reconciliation did not add a missing authoritative table role.");
+  }
+  const incompleteCoverage = buildTenderFieldCoverage({ positions: [{
+    position_title: "Railway Rolling Stock Expert",
+    source_position_number: 6,
+    minimum_education: "",
+    general_experience: "",
+    specific_experience: "",
+  }] }, secondRailwayRole);
+  const unresolvedCoverage = incompleteCoverage.positions[0]?.unresolved_fields || [];
+  if (!unresolvedCoverage.includes("minimum_education") || !unresolvedCoverage.includes("general_experience")) {
+    throw new Error("Per-position field coverage did not request recovery for source-visible requirements.");
+  }
+
+  const railwayTenderPath = "C:/Users/Dell/Documents/TENDER NO KR-SCM-WB-005-2025-2026 RFP FOR CONSULTANCY SERVICES FOR THE FEASIBILITY STUDY.pdf";
+  if (fs.existsSync(railwayTenderPath)) {
+    const parser = new PDFParse({ data: fs.readFileSync(railwayTenderPath) });
+    const parsedRailway = await parser.getText();
+    await parser.destroy();
+    const railwaySource = parsedRailway.pages.map((page, index) => `--- PAGE ${index + 1} ---\n${page.text}`).join("\n");
+    const numberedRailwayRoles = extractNumberedExpertQualificationRows(railwaySource);
+    const signalingRole = numberedRailwayRoles.find((position: any) => /Signal(?:l)?ing.*Telecommunication/i.test(position.position_title));
+    if (numberedRailwayRoles.length < 35) throw new Error(`Expected at least 35 numbered railway qualification rows, got ${numberedRailwayRoles.length}.`);
+    if (numberedRailwayRoles.some((position: any) => !position.minimum_education || !position.general_experience)) {
+      throw new Error("Every detected railway qualification row must retain its education and experience cells.");
+    }
+    if (!signalingRole?.minimum_education?.includes("Telecommunications Engineering") || signalingRole?.input_months !== 9) {
+      throw new Error("The real signaling expert row did not retain complete education and input months.");
+    }
   }
 
   const looseTenderText = `

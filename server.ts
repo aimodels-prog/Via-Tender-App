@@ -9,6 +9,7 @@ import helmet from "helmet";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { google } from "googleapis";
@@ -43,6 +44,23 @@ const PORTAL_SSO_AUDIENCE = process.env.PORTAL_SSO_AUDIENCE || process.env.PORTA
 const PORTAL_HOME_URL = process.env.PORTAL_HOME_URL || process.env.PORTAL_POST_LOGOUT_URL || new URL(PORTAL_ENTRY_URL).origin;
 const DISABLE_VIA_STAFF_PASSWORD_LOGIN = process.env.DISABLE_VIA_STAFF_PASSWORD_LOGIN !== "false";
 const EMERGENCY_ADMIN_LOGIN_ENABLED = process.env.EMERGENCY_ADMIN_LOGIN_ENABLED !== "false";
+const TENDER_EXTRACTION_PIPELINE_VERSION = process.env.TENDER_EXTRACTION_PIPELINE_VERSION || "field-complete-v1";
+
+function tenderTextCacheKey(text: string) {
+  return createHash("sha256")
+    .update(TENDER_EXTRACTION_PIPELINE_VERSION)
+    .update("\0text\0")
+    .update(text)
+    .digest("hex");
+}
+
+async function tenderFilesCacheKey(files: Express.Multer.File[]) {
+  const hash = createHash("sha256").update(TENDER_EXTRACTION_PIPELINE_VERSION).update("\0pdf\0");
+  for (const file of files) {
+    hash.update("\0file\0").update(await fs.readFile(file.path));
+  }
+  return hash.digest("hex");
+}
 
 function isAllowedEmail(value: string) {
   const email = String(value || "").trim().toLowerCase();
@@ -1143,7 +1161,30 @@ async function startServer() {
     }
   });
 
-  async function runTenderParseJob(jobId: string, originalTenderText: string) {
+  async function readTenderExtractionCache(cacheKey: string) {
+    const cached = await query(
+      `select result from tender_extraction_cache where cache_key = $1 and pipeline_version = $2`,
+      [cacheKey, TENDER_EXTRACTION_PIPELINE_VERSION],
+    );
+    if (!cached.rowCount) return null;
+    await query(`update tender_extraction_cache set last_used_at = now() where cache_key = $1`, [cacheKey]);
+    return cached.rows[0].result;
+  }
+
+  async function storeTenderExtractionCache(cacheKey: string, sourceFiles: any[], result: any) {
+    await query(
+      `insert into tender_extraction_cache (cache_key, pipeline_version, source_files, result)
+       values ($1, $2, $3::jsonb, $4::jsonb)
+       on conflict (cache_key) do update
+       set pipeline_version = excluded.pipeline_version,
+           source_files = excluded.source_files,
+           result = excluded.result,
+           last_used_at = now()`,
+      [cacheKey, TENDER_EXTRACTION_PIPELINE_VERSION, JSON.stringify(sourceFiles), JSON.stringify(result)],
+    );
+  }
+
+  async function runTenderParseJob(jobId: string, originalTenderText: string, cacheKey: string) {
     try {
       await query(
         `update parse_jobs set status = 'processing', progress = 10, updated_at = now() where id = $1`,
@@ -1166,6 +1207,7 @@ async function startServer() {
          where id = $1`,
         [jobId, JSON.stringify({ tender })],
       );
+      await storeTenderExtractionCache(cacheKey, [{ type: "text", length: originalTenderText.length }], { tender });
       await writeLog("Tender Parsed", `Tender extraction job ${jobId} completed`);
     } catch (error: any) {
       console.error("Tender parse job failed:", error);
@@ -1179,7 +1221,7 @@ async function startServer() {
     }
   }
 
-  async function runTenderPdfParseJob(jobId: string, files: Express.Multer.File[]) {
+  async function runTenderPdfParseJob(jobId: string, files: Express.Multer.File[], cacheKey: string) {
     try {
       await query(`update parse_jobs set status = 'processing', progress = 10, updated_at = now() where id = $1`, [jobId]);
       const { runParseTenderPdfFiles } = await import("./src/backend/ai.ts");
@@ -1197,15 +1239,17 @@ async function startServer() {
         `update parse_jobs set status = 'completed', progress = 100, result = $2::jsonb, updated_at = now(), completed_at = now() where id = $1`,
         [jobId, JSON.stringify({ tender })],
       );
+      await storeTenderExtractionCache(cacheKey, files.map((file) => ({ name: file.originalname, size: file.size })), { tender });
       await writeLog("Tender Parsed", `Native PDF tender extraction job ${jobId} completed`);
     } catch (error: any) {
       console.error("Native PDF tender parse job failed:", error);
-      await Promise.all(files.map((file) => fs.unlink(file.path).catch(() => undefined)));
       await query(
         `update parse_jobs set status = 'failed', progress = 100, error_message = $2, updated_at = now(), completed_at = now() where id = $1`,
         [jobId, error?.message || "Native PDF tender parsing failed"],
       );
       await writeLog("Tender Parse Failed", `Native PDF extraction job ${jobId} failed: ${error?.message || error}`, "ERROR");
+    } finally {
+      await Promise.all(files.map((file) => fs.unlink(file.path).catch(() => undefined)));
     }
   }
 
@@ -1218,16 +1262,37 @@ async function startServer() {
         return res.status(400).json({ error: "Native tender extraction currently accepts PDF files only." });
       }
       const jobId = `parse_tender_${uuidv4()}`;
+      const cacheKey = await tenderFilesCacheKey(files);
+      const cachedResult = await readTenderExtractionCache(cacheKey);
       await query(
-        `insert into parse_jobs (id, user_id, type, status, progress, input) values ($1, $2, 'tender', 'queued', 0, $3::jsonb)`,
-        [jobId, req.user?.id || null, JSON.stringify({
-          extractionMode: "native-pdf-vision",
-          files: files.map((file) => ({ name: file.originalname, size: file.size })),
-          startedAt: new Date().toISOString(),
-        })],
+        `insert into parse_jobs (id, user_id, type, status, progress, input, result, completed_at)
+         values ($1, $2, 'tender', $3, $4, $5::jsonb, $6::jsonb, $7)`,
+        [
+          jobId,
+          req.user?.id || null,
+          cachedResult ? "completed" : "queued",
+          cachedResult ? 100 : 0,
+          JSON.stringify({
+            cacheKey,
+            cacheHit: Boolean(cachedResult),
+            extractionMode: "native-pdf-vision",
+            files: files.map((file) => ({ name: file.originalname, size: file.size })),
+            startedAt: new Date().toISOString(),
+          }),
+          cachedResult ? JSON.stringify(cachedResult) : null,
+          cachedResult ? new Date() : null,
+        ],
       );
-      void runTenderPdfParseJob(jobId, files);
-      res.status(202).json({ jobId, status: "queued", progress: 0 });
+      if (cachedResult) {
+        await query(
+          `update parse_jobs set status = 'completed', progress = 100, result = $2::jsonb, completed_at = now(), updated_at = now() where id = $1`,
+          [jobId, JSON.stringify(cachedResult)],
+        );
+        await Promise.all(files.map((file) => fs.unlink(file.path).catch(() => undefined)));
+        return res.status(202).json({ jobId, status: "completed", progress: 100, cached: true, tender: cachedResult.tender });
+      }
+      void runTenderPdfParseJob(jobId, files, cacheKey);
+      res.status(202).json({ jobId, status: "queued", progress: 0, cached: false });
     } catch (error: any) {
       await Promise.all(files.map((file) => fs.unlink(file.path).catch(() => undefined)));
       res.status(500).json({ error: error.message });
@@ -1239,21 +1304,35 @@ async function startServer() {
       const originalTenderText = String(req.body.text || "");
       if (!originalTenderText.trim()) return res.status(400).json({ error: "Tender text is required." });
       const jobId = `parse_tender_${uuidv4()}`;
+      const cacheKey = tenderTextCacheKey(originalTenderText);
+      const cachedResult = await readTenderExtractionCache(cacheKey);
       await query(
-        `insert into parse_jobs (id, user_id, type, status, progress, input)
-         values ($1, $2, 'tender', 'queued', 0, $3::jsonb)`,
+        `insert into parse_jobs (id, user_id, type, status, progress, input, result, completed_at)
+         values ($1, $2, 'tender', $3, $4, $5::jsonb, $6::jsonb, $7)`,
         [
           jobId,
           req.user?.id || null,
+          cachedResult ? "completed" : "queued",
+          cachedResult ? 100 : 0,
           JSON.stringify({
+            cacheKey,
+            cacheHit: Boolean(cachedResult),
             originalTenderText,
             originalTenderTextLength: originalTenderText.length,
             startedAt: new Date().toISOString(),
           }),
+          cachedResult ? JSON.stringify(cachedResult) : null,
+          cachedResult ? new Date() : null,
         ],
       );
-      void runTenderParseJob(jobId, originalTenderText);
-      res.status(202).json({ jobId, status: "queued", progress: 0 });
+      if (!cachedResult) void runTenderParseJob(jobId, originalTenderText, cacheKey);
+      res.status(202).json({
+        jobId,
+        status: cachedResult ? "completed" : "queued",
+        progress: cachedResult ? 100 : 0,
+        cached: Boolean(cachedResult),
+        tender: cachedResult?.tender,
+      });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

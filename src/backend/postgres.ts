@@ -186,6 +186,18 @@ export async function initPostgres() {
   await query(`create index if not exists parse_jobs_user_created_idx on parse_jobs (user_id, created_at desc)`);
 
   await query(`
+    create table if not exists tender_extraction_cache (
+      cache_key text primary key,
+      pipeline_version text not null,
+      source_files jsonb not null default '[]'::jsonb,
+      result jsonb not null,
+      created_at timestamptz not null default now(),
+      last_used_at timestamptz not null default now()
+    )
+  `);
+  await query(`create index if not exists tender_extraction_cache_last_used_idx on tender_extraction_cache (last_used_at desc)`);
+
+  await query(`
     create table if not exists drive_files (
       id text primary key,
       google_file_id text not null unique,

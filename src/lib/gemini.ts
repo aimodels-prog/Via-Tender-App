@@ -121,6 +121,7 @@ export async function parseTenderPdfFiles(files: File[]): Promise<any> {
     const response = await fetch('/api/parse-tender-files', { method: 'POST', body: formData });
     const { data, error } = await readApiResponse(response);
     if (!response.ok) throw new Error(error || data.error || `Tender upload failed (${response.status}).`);
+    if (data.tender) return data.tender;
     const jobId = data.jobId;
     if (!jobId) throw new Error('Native tender extraction did not return a job id.');
 

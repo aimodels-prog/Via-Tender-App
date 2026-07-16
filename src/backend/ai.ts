@@ -1009,9 +1009,8 @@ export function enrichTenderExtractionFromSourceText(
     };
   };
 
-  return {
-    ...tender,
-    positions: (Array.isArray(tender?.positions) ? tender.positions : []).map((position: any) => {
+  const existingPositions = Array.isArray(tender?.positions) ? tender.positions : [];
+  const enrichedPositions = existingPositions.map((position: any) => {
       const recovered = findRecovered(position);
       if (!recovered) return position;
       const evidenceFields = new Set((Array.isArray(position?.field_evidence) ? position.field_evidence : [])
@@ -1041,7 +1040,102 @@ export function enrichTenderExtractionFromSourceText(
       const recoveredFields = ["input_months", "minimum_education", "minimum_years_experience", "general_experience", "specific_experience"]
         .filter((field) => !String(position?.[field] || "").trim() && String(merged?.[field] || "").trim());
       return evidenceForRecoveredFields(merged, recovered, recoveredFields);
-    }),
+    });
+  const authoritativeRecoverySources = /(?:numbered_expert_qualification_table|key_expert_evaluation_table|staff_qualification_table|key_expert_position_table|personnel_table|job_title_section)/i;
+  const missingRecoveredRoles = recoveredPositions.filter((recovered: any) =>
+    authoritativeRecoverySources.test(String(recovered?.recovery_source || "")) &&
+    !enrichedPositions.some((position: any) => titleCompatible(position?.position_title, recovered?.position_title)),
+  );
+  const recoveredAdditions = missingRecoveredRoles.map((recovered: any) => {
+    const recoveredFields = [
+      "position_title", "input_months", "minimum_education", "minimum_years_experience",
+      "general_experience", "specific_experience",
+    ].filter((field) => String(recovered?.[field] || "").trim());
+    return evidenceForRecoveredFields({
+      ...recovered,
+      quantity: recovered?.quantity,
+      source_text_enriched: true,
+      recovered_missing_role: true,
+    }, recovered, recoveredFields);
+  });
+  const positions = [...enrichedPositions, ...recoveredAdditions];
+
+  return {
+    ...tender,
+    positions,
+    role_reconciliation: {
+      source_register_count: recoveredPositions.filter((position: any) => authoritativeRecoverySources.test(String(position?.recovery_source || ""))).length,
+      ai_role_count_before_reconciliation: existingPositions.length,
+      final_role_count: positions.length,
+      roles_added_from_source_register: recoveredAdditions.map((position: any) => position.position_title),
+      reconciled: true,
+    },
+  };
+}
+
+const TENDER_POSITION_COVERAGE_FIELDS = [
+  "position_title", "quantity", "is_key_expert", "expert_category", "lot_reference", "input_months",
+  "work_location", "minimum_education", "minimum_years_experience", "minimum_specific_years",
+  "minimum_similar_projects", "general_experience", "specific_experience", "role_description",
+  "regional_experience", "country_experience", "required_sector_experience", "mandatory_skills",
+  "required_software", "required_certifications", "professional_memberships", "required_languages",
+  "nationality_preference", "residency_requirement", "position_deliverables", "evaluation_points",
+] as const;
+
+export function buildTenderFieldCoverage(tender: any, rawText: string) {
+  const valuePresent = (value: any) => Array.isArray(value)
+    ? value.some((item) => String(item || "").trim())
+    : value !== undefined && value !== null && value !== false && String(value).trim() !== "";
+  const fieldSignals: Record<string, RegExp> = {
+    quantity: /\b(?:quantity|qty|number of|no\.?|persons?|people|staff required)\b/i,
+    is_key_expert: /\b(?:key|non[-\s]?key)\s+(?:expert|staff)\b/i,
+    expert_category: /\b(?:key|non[-\s]?key|support)\s+(?:expert|staff|personnel)\b/i,
+    lot_reference: /\b(?:lot|package|contract)\b/i,
+    input_months: /\b(?:man[-\s]?months?|person[-\s]?months?|input months?|staff effort)\b/i,
+    work_location: /\b(?:location|duty station|place of assignment|based in)\b/i,
+    minimum_education: /\b(?:education|qualification|bachelor|master|degree|diploma|b\.?sc|m\.?sc|ph\.?d)\b/i,
+    minimum_years_experience: /\b\d{1,2}\s*(?:\([^)]*\)\s*)?(?:years?|yrs?)\b/i,
+    minimum_specific_years: /\b(?:specific|relevant|similar|sector|role)\s+experience\b/i,
+    minimum_similar_projects: /\b(?:projects?|assignments?|studies)\b/i,
+    general_experience: /\b(?:general|professional|overall|relevant)?\s*experience\b/i,
+    specific_experience: /\b(?:specific|similar|sector|project|assignment|role)\s+experience\b/i,
+    role_description: /\b(?:responsibilities|duties|tasks|functions|scope of work|shall (?:prepare|review|manage|supervise|design|assess|conduct))\b/i,
+    regional_experience: /\b(?:regional|international|sub[-\s]?saharan|africa|middle east|asia|europe)\s+experience\b/i,
+    country_experience: /\b(?:country|national|local)\s+experience\b/i,
+    required_sector_experience: /\b(?:railway|road|bridge|water|power|building|transport|infrastructure|construction)\b/i,
+    mandatory_skills: /\b(?:skills?|competenc|capabilit|proficien)\b/i,
+    required_software: /\b(?:software|AutoCAD|Primavera|MS Project|GIS|BIM)\b/i,
+    required_certifications: /\b(?:certif|registered|registration|chartered|licen[cs]|practi[cs]ing)\b/i,
+    professional_memberships: /\b(?:membership|member of|professional body|institution)\b/i,
+    required_languages: /\b(?:language|English|French|Arabic|Portuguese|Spanish|fluent|proficien)\b/i,
+    nationality_preference: /\b(?:nationality|citizen|national expert|local expert)\b/i,
+    residency_requirement: /\b(?:resident|residency|locally based|local presence)\b/i,
+    position_deliverables: /\b(?:deliverables?|outputs?|reports?)\b/i,
+    evaluation_points: /\b(?:points?|marks?|score|weight)\b/i,
+  };
+  const positions = (Array.isArray(tender?.positions) ? tender.positions : []).map((position: any) => {
+    const context = extractTenderRoleContext(rawText, position.position_title, Number(position.source_position_number || 0) || undefined);
+    const fields = Object.fromEntries(TENDER_POSITION_COVERAGE_FIELDS.map((field) => {
+      const extracted = valuePresent(position?.[field]);
+      const sourceSignal = !extracted && Boolean(context && fieldSignals[field]?.test(context));
+      return [field, {
+        status: extracted ? "extracted" : sourceSignal ? "recovery_required" : "not_stated_or_not_applicable",
+        source_signal: sourceSignal,
+      }];
+    }));
+    return {
+      position_title: position.position_title,
+      source_position_number: position.source_position_number,
+      fields,
+      unresolved_fields: Object.entries(fields)
+        .filter(([, coverage]: any) => coverage.status === "recovery_required")
+        .map(([field]) => field),
+    };
+  });
+  return {
+    positions,
+    unresolved_field_count: positions.reduce((total: number, position: any) => total + position.unresolved_fields.length, 0),
+    generated_at: new Date().toISOString(),
   };
 }
 
@@ -1458,11 +1552,20 @@ function getTenderEconomyModels() {
 }
 
 function getTenderDeepModels() {
-  return Array.from(new Set([
-    process.env.TENDER_DEEP_EXTRACTION_MODEL || process.env.TENDER_EXTRACTION_MODEL || "gemini-3.1-pro-preview",
-    process.env.TENDER_EXTRACTION_MODEL || "gemini-3.5-flash",
-    "gemini-3.5-flash",
-  ].filter(Boolean)));
+  const models = [process.env.TENDER_EXTRACTION_MODEL || "gemini-3.5-flash", "gemini-3.5-flash"];
+  if (process.env.TENDER_USE_PRO_FALLBACK === "true") {
+    models.push(process.env.TENDER_DEEP_EXTRACTION_MODEL || "gemini-3.1-pro-preview");
+  }
+  return Array.from(new Set(models.filter(Boolean)));
+}
+
+function getTenderRepairModels(fallbackModels: string[] = []) {
+  const flashModel = process.env.TENDER_REPAIR_MODEL || process.env.TENDER_EXTRACTION_MODEL || "gemini-3.5-flash";
+  const models = [flashModel, "gemini-3.5-flash"];
+  if (process.env.TENDER_USE_PRO_FALLBACK === "true") {
+    models.push(process.env.TENDER_DEEP_EXTRACTION_MODEL || fallbackModels[0] || "gemini-3.1-pro-preview");
+  }
+  return Array.from(new Set(models.filter(Boolean)));
 }
 
 function buildEconomyTenderPrompt(tenderText: string, chunkNote = "") {
@@ -1575,6 +1678,7 @@ async function runParseTenderTextEconomy(
   sourcePageTexts: Array<{ page_number: number; text: string }> = [],
 ): Promise<any> {
   const models = getTenderEconomyModels();
+  const searchableSourceText = sourcePageTexts.length ? sourcePageTextsToTenderText(sourcePageTexts) : text;
   const parseTenderWithPrompt = async (promptText: string) => {
     const response = await callGenAIWithRetry((modelName) => getAI().models.generateContent({
       model: modelName,
@@ -1620,13 +1724,15 @@ async function runParseTenderTextEconomy(
     throw new Error(`Tender extraction failed: ${failedReason?.reason?.message || "No AI extraction result returned."}`);
   }
 
-  let tender = postProcessTenderExtraction(mergeTenderExtractions(fulfilled), text);
+  let tender = postProcessTenderExtraction(mergeTenderExtractions(fulfilled), searchableSourceText);
+  tender = enrichTenderExtractionFromSourceText(tender, searchableSourceText, sourcePageTexts);
   if (sourcePageTexts.length) tender = reconcileTenderEvidencePages(tender, sourcePageTexts);
-  tender = await repairTenderRolesFromFullDocumentContext(tender, text, models);
+  tender = await repairTenderRolesFromFullDocumentContext(tender, searchableSourceText, models);
   if (sourcePageTexts.length) {
     tender = hydrateTenderEvidenceFromSourcePages(reconcileTenderEvidencePages(tender, sourcePageTexts), sourcePageTexts);
   }
   tender = normalizeTenderRecord(tender);
+  tender.field_coverage = buildTenderFieldCoverage(tender, searchableSourceText);
   const validation = validateExtractedTender(tender);
   logExtractionValidation("TENDER", tender.tender_title || tender.name || "Economy tender extraction", validation);
   const failedChunks = extractionResults.filter((result) => result.status === "rejected").length;
@@ -1658,24 +1764,33 @@ async function repairTenderRolesFromFullDocumentContext(
   currentTender: any,
   rawTenderText: string,
   models: string[],
+  repairOnlyModels?: string[],
 ) {
   const normalized = normalizeTenderRecord(currentTender || {});
   const positions = Array.isArray(normalized.positions) ? normalized.positions : [];
   if (!positions.length || !String(rawTenderText || "").trim()) return normalized;
+  const coverage = buildTenderFieldCoverage(normalized, rawTenderText);
+  const coverageByTitle = new Map(coverage.positions.map((position: any) => [
+    `${Number(position.source_position_number || 0)}|${String(position.position_title || "").toLowerCase()}`,
+    position,
+  ]));
 
   const candidates = positions
-    .map((position: any) => ({
-      position,
-      missingCount: missingTenderRoleDetailCount(position),
-      missingEvidence: !Array.isArray(position?.field_evidence) || position.field_evidence.length === 0,
-      missingAcademicEducation: !/\b(?:master'?s?|bachelor'?s?|degree|diploma|b\.?\s*sc|m\.?\s*sc|ph\.?\s*d|hons\.?|higher diploma|ordinary national diploma)\b/i.test(String(position?.minimum_education || "")),
-      context: extractTenderRoleContext(
+    .map((position: any) => {
+      const positionCoverage = coverageByTitle.get(`${Number(position.source_position_number || 0)}|${String(position.position_title || "").toLowerCase()}`) as any;
+      const unresolvedFields = Array.isArray(positionCoverage?.unresolved_fields) ? positionCoverage.unresolved_fields : [];
+      return {
+        position,
+        unresolvedFields,
+        missingCount: unresolvedFields.length,
+        context: extractTenderRoleContext(
         rawTenderText,
         position.position_title,
         Number(position.source_position_number || 0) || undefined,
-      ),
-    }))
-    .filter((item: any) => item.context && (item.missingCount > 0 || item.missingEvidence || item.missingAcademicEducation))
+        ),
+      };
+    })
+    .filter((item: any) => item.context && item.missingCount > 0)
     .sort((a: any, b: any) => b.missingCount - a.missingCount);
 
   if (!candidates.length) return normalized;
@@ -1685,7 +1800,7 @@ async function repairTenderRolesFromFullDocumentContext(
       model: modelName,
       contents: [{ role: "user", parts: [{ text: promptText }] }],
       config: { responseMimeType: "application/json", responseSchema: tenderSchema, temperature: 0 },
-    }), models);
+    }), repairOnlyModels || getTenderRepairModels(models));
     return sanitizeExtractedValues(parseGenAIJSON(response.text || "{}"));
   };
 
@@ -1700,6 +1815,7 @@ Rules:
 - Use ONLY the source context below.
 - Keep position_title as clean occupational role only. K1/K-2/Position K3 belongs only in source_position_number.
 - Extract every available education, general experience, specific experience, professional registration, certifications, skills, languages, nationality/residency, input months, evaluation points, duties, and deliverables for each listed role.
+- Focus on each role's missing_fields list. Return existing fields unchanged when repeated in the source; never erase a populated field.
 - minimum_education is academic only: degree, diploma, academic level, and discipline. Never use registration/chartership as a substitute for education.
 - required_certifications contains professional registration, chartership, practising certificates, and licences.
 - Do not transfer requirements between roles.
@@ -1714,14 +1830,30 @@ ${JSON.stringify(batch.map((item: any) => ({
   source_position_number: item.position.source_position_number,
   lot_reference: item.position.lot_reference,
   expert_category: item.position.expert_category,
+  missing_fields: item.unresolvedFields,
   current: {
     quantity: item.position.quantity || "",
     input_months: item.position.input_months || "",
+    work_location: item.position.work_location || "",
     minimum_education: item.position.minimum_education || "",
     minimum_years_experience: item.position.minimum_years_experience || "",
+    minimum_specific_years: item.position.minimum_specific_years || "",
+    minimum_similar_projects: item.position.minimum_similar_projects || "",
     general_experience: item.position.general_experience || "",
     specific_experience: item.position.specific_experience || "",
     role_description: item.position.role_description || "",
+    regional_experience: item.position.regional_experience || "",
+    country_experience: item.position.country_experience || "",
+    required_sector_experience: item.position.required_sector_experience || [],
+    mandatory_skills: item.position.mandatory_skills || [],
+    required_software: item.position.required_software || [],
+    required_certifications: item.position.required_certifications || [],
+    professional_memberships: item.position.professional_memberships || [],
+    required_languages: item.position.required_languages || [],
+    nationality_preference: item.position.nationality_preference || "",
+    residency_requirement: item.position.residency_requirement || "",
+    position_deliverables: item.position.position_deliverables || [],
+    evaluation_points: item.position.evaluation_points || "",
   },
 })), null, 2)}
 
@@ -1741,7 +1873,13 @@ ${batch.map((item: any) => `--- POSITION: ${item.position.position_title} ---\n$
     else console.warn("[Tender extraction] Position-first full-document repair failed; continuing.", result.reason?.message || result.reason);
   });
 
-  return normalizeTenderRecord(mergeTenderExtractions(repairedPieces));
+  const repaired = normalizeTenderRecord(mergeTenderExtractions(repairedPieces));
+  const remainingCoverage = buildTenderFieldCoverage(repaired, rawTenderText);
+  if (!repairOnlyModels && process.env.TENDER_USE_PRO_FALLBACK === "true" && remainingCoverage.unresolved_field_count > 0) {
+    const proModel = process.env.TENDER_DEEP_EXTRACTION_MODEL || models[0] || "gemini-3.1-pro-preview";
+    return repairTenderRolesFromFullDocumentContext(repaired, rawTenderText, [proModel], [proModel]);
+  }
+  return repaired;
 }
 
 async function auditTenderExtractionWithAI(
@@ -3126,9 +3264,12 @@ Attach field_evidence to every populated field. Keep roles separate by lot, posi
       fullSourceText,
       modelNames,
     );
-    const finalizedExtraction = await finalizeTenderExtraction([auditedExtraction], modelNames);
+    const finalizedExtraction = process.env.TENDER_FINAL_AI_SYNTHESIS === "true"
+      ? await finalizeTenderExtraction([auditedExtraction], modelNames)
+      : auditedExtraction;
+    const factPreservedFinalExtraction = mergeTenderExtractions([auditedExtraction, finalizedExtraction]);
     const postFinalRepair = await repairTenderRolesFromFullDocumentContext(
-      finalizedExtraction,
+      factPreservedFinalExtraction,
       fullSourceText,
       modelNames,
     );
@@ -3142,6 +3283,7 @@ Attach field_evidence to every populated field. Keep roles separate by lot, posi
     });
     const sourceEnrichedExtraction = enrichTenderExtractionFromSourceText(postFinalRepair, fullSourceText, sourcePageTexts);
     const tender = normalizeTenderRecord(reconcileTenderEvidencePages(sourceEnrichedExtraction, sourcePageTexts));
+    tender.field_coverage = buildTenderFieldCoverage(tender, fullSourceText);
     if (tender.positions.length !== postFinalRepair.positions.length) {
       tender.extraction_warnings = Array.from(new Set([
         ...(tender.extraction_warnings || []),
@@ -3170,7 +3312,7 @@ Attach field_evidence to every populated field. Keep roles separate by lot, posi
     tender.review_required = tender.extraction_warnings.length > 0;
     const validation = validateExtractedTender(tender);
     tender.extraction_audit = {
-      pipeline: "native-pdf-vision + staged-page-classification + tender-level-facts + position-register + deterministic-table-context + per-position-requirements + duties-tor-responsibilities + visual-layout-recovery + segment-repair + position-first-full-document-role-search + second-ai-audit + mandatory-final-ai-synthesis + internal-evidence-validation",
+      pipeline: "native-pdf-vision + staged-page-classification + tender-level-facts + deterministic-role-register-reconciliation + per-position-field-coverage + targeted-flash-recovery + duties-tor-responsibilities + visual-layout-recovery + fact-preserving-merge + second-ai-audit + internal-validation",
       model: modelNames[0],
       totalPages,
       segmentSize,
@@ -3193,6 +3335,8 @@ Attach field_evidence to every populated field. Keep roles separate by lot, posi
         proReductionPercent: totalPages ? Math.round((1 - proPageSet.size / totalPages) * 100) : 0,
       },
       validationIssues: validation.issues,
+      finalAiSynthesisEnabled: process.env.TENDER_FINAL_AI_SYNTHESIS === "true",
+      unresolvedFieldCount: tender.field_coverage?.unresolved_field_count || 0,
       extractedAt: new Date().toISOString(),
     };
     if (failedSegments > 0) {
