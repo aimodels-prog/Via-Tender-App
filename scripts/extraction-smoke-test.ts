@@ -1,10 +1,10 @@
 import fs from "fs";
 import mammoth from "mammoth";
 import { PDFParse } from "pdf-parse";
-import { extractUniversalCVFacts, extractUniversalTenderFacts } from "../src/lib/universalExtraction.ts";
+import { extractNumberedExpertQualificationRows, extractUniversalCVFacts, extractUniversalTenderFacts } from "../src/lib/universalExtraction.ts";
 import { normalizeExpertCollections, postProcessExtractedExpert } from "../src/lib/cvPostProcess.ts";
 import { normalizeTenderRecord } from "../src/lib/tenderPostProcess.ts";
-import { extractTenderRoleContext, getTenderTableContextsForRange, inferTenderTableContextsFromText, mergeTenderExtractions, reconcileTenderEvidencePages, selectTenderPagesForPro, validateTenderFieldSemantics } from "../src/backend/ai.ts";
+import { enrichTenderExtractionFromSourceText, extractTenderRoleContext, getTenderTableContextsForRange, inferTenderTableContextsFromText, mergeTenderExtractions, reconcileTenderEvidencePages, selectTenderPagesForPro, validateTenderFieldSemantics } from "../src/backend/ai.ts";
 
 async function readDocxText(path: string) {
   const result = await mammoth.extractRawText({ buffer: fs.readFileSync(path) });
@@ -73,6 +73,40 @@ async function main() {
   const tenderFacts = extractUniversalTenderFacts(tenderText);
   console.log("Tender role facts:", tenderFacts.positions.map((item) => item.position_title));
   if (tenderFacts.positions.length < 3) throw new Error("Expected tender role recovery to find at least 3 positions.");
+
+  const railwayQualificationTable = `
+5. Signaling & Telecommunications Expert
+Education:
+• Bachelor in Electrical and Communications Engineering, Electrical and Telecommunications Engineering or Mechatronics Engineering
+• Experience:
+• Ten (10) years or more experience in design, installation, and maintenance of railway signalling and telecommunications systems.
+• Experience as signalling and telecommunications expert in feasibility studies of two (2) railway projects of size > USD 10 million in construction cost
+Professional Registration
+• Must be a Professionally Chartered / Registered Engineer.
+The registration body must be internationally recognised.
+9`;
+  const railwayRows = extractNumberedExpertQualificationRows(railwayQualificationTable);
+  const railwayRole = railwayRows[0];
+  if (!railwayRole?.minimum_education?.includes("Telecommunications Engineering")) throw new Error("Railway expert education disciplines were not preserved.");
+  if (railwayRole?.minimum_years_experience !== 10) throw new Error("Railway expert minimum years were not extracted.");
+  if (!railwayRole?.specific_experience?.includes("two (2) railway projects")) throw new Error("Railway expert specific experience was not separated.");
+  if (railwayRole?.input_months !== 9) throw new Error("Railway expert input months were not extracted from the table column.");
+  if (!railwayRole?.required_certifications?.join(" ").includes("Chartered / Registered")) throw new Error("Railway expert professional registration was not extracted.");
+  const enrichedRailway = enrichTenderExtractionFromSourceText({ positions: [{
+    position_title: "Signaling & Telecommunications Expert",
+    source_position_number: 5,
+    quantity: 1,
+    is_key_expert: false,
+    minimum_education: "",
+    general_experience: "",
+    specific_experience: "",
+    required_certifications: [],
+    field_evidence: [],
+  }] }, railwayQualificationTable, [{ page_number: 106, text: railwayQualificationTable }]);
+  const enrichedRailwayRole = enrichedRailway.positions[0];
+  if (enrichedRailwayRole.quantity !== undefined || enrichedRailwayRole.input_months !== 9 || !enrichedRailwayRole.is_key_expert) {
+    throw new Error("Source-text enrichment did not correct quantity, input months, and key-expert status.");
+  }
 
   const looseTenderText = `
     Technical Proposal Request

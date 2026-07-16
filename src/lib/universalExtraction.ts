@@ -508,16 +508,10 @@ function cleanRequirementContentLine(line: string, titleWords: string[]) {
     .trim();
   if (!text) return "";
 
-  const hasRequirementSignal = /\b(master|bachelor|degree|diploma|engineering|economics|finance|architecture|planning|experience|years?|projects?|feasibility|design|construction|registration|registered|chartered|licensed|licenced|environmental|social|safeguards|surveying|geomatics|geospatial|transportation|railway|operations)\b/i.test(text);
   const degreeStart = text.search(/\b(?:master'?s?|bachelor'?s?|postgraduate|post graduate|professionally qualified|diploma|degree)\b/i);
   if (degreeStart > 0) text = text.slice(degreeStart).trim();
   const tokens = text.toLowerCase().split(/\s+/).map((word) => word.replace(/[^a-z0-9]+/g, "")).filter(Boolean);
   if (tokens.length && tokens.every((word) => titleWords.includes(word))) return "";
-
-  while (tokens.length && titleWords.includes(tokens[0]) && hasRequirementSignal) {
-    text = text.replace(/^\S+\s*/, "").trim();
-    tokens.shift();
-  }
 
   return text;
 }
@@ -608,7 +602,8 @@ function parseRequirementSections(title: string, nearby: string) {
     minimum_years_experience: parseYearsFromRequirement(experiencePoints.join(" ")),
     general_experience: (generalPoints.length ? generalPoints : experiencePoints.slice(0, 1)).join(" "),
     specific_experience: specificPoints.filter((point) => !generalPoints.includes(point) || /specific|project|feasibility|study|design/i.test(point)).join(" "),
-    role_description: rolePoints.join(" ") || (registrationPoints.length ? `Professional Registration: ${registrationPoints.join(" ")}` : ""),
+    role_description: rolePoints.join(" "),
+    required_certifications: registrationPoints,
   };
 }
 
@@ -634,19 +629,28 @@ function buildTenderPositionFromBlock(title: string, line: string, nearby: strin
     reqText.match(/\bProfessional Registration\s*:?\s*(.+?)(?=\bEducation\s*:?\s*\d{0,2}\s*\d{1,2}\.\s+[A-Z]|\b\d{1,2}\.\s+[A-Z]|$)/i)?.[1] || "",
   );
   const firstExperienceSentence = clean(reqText.match(/\b(?:shall have|must have|minimum|min\.?|at least|required)\s+[^.]{0,220}?\bexperience\b[^.]{0,260}(?:\.|$)/i)?.[0] || "");
-  const firstResponsibilitySentence = clean(reqText.match(/\b(?:shall|will|must|responsible for|responsibilities include|duties include|tasks include|to\s+(?:manage|lead|prepare|review|supervise|coordinate|undertake|conduct|ensure|assist))\b[^.]{20,500}(?:\.|$)/i)?.[0] || "");
+  const firstResponsibilitySentence = clean(reqText.match(/\b(?:responsible for|responsibilities include|duties include|tasks include|(?:shall|will|must|to)\s+(?:manage|lead|prepare|review|supervise|coordinate|undertake|conduct|ensure|assist|assess|design|monitor|inspect|analyse|analyze))\b[^.]{20,500}(?:\.|$)/i)?.[0] || "");
   const qualificationSentence = clean(reqText.match(/\b(?:qualification|minimum education|academic qualification|education)\s*[:\-]?\s*(.+?)(?=\b(?:general experience|specific experience|experience|role|responsibil|duties|tasks|skills?|location|position|job title)\b|$)/i)?.[1] || "");
-  const combinedRequirements = stripRoleTitleNoise([experienceSection, registrationSection].filter(Boolean).join(" "));
+  const experienceRequirements = experienceSection
+    .split(/(?=\bExperience\s+as\b)/i)
+    .map(clean)
+    .filter(Boolean);
+  const broadExperienceSection = experienceRequirements[0] || experienceSection;
+  const specificExperienceSection = experienceRequirements.slice(1).join(" ");
   return {
     position_title: title,
     quantity: extractQuantity(line),
-    minimum_education: parsedSections.minimum_education || educationSection || qualificationSentence || clean(reqText.match(/\b(?:bachelor|master|phd|degree|diploma|qualification)[^.]{0,220}(?:\.|$)/i)?.[0] || ""),
+    minimum_education: educationSection || parsedSections.minimum_education || qualificationSentence || clean(reqText.match(/\b(?:bachelor|master|phd|degree|diploma|qualification)[^.]{0,220}(?:\.|$)/i)?.[0] || ""),
     minimum_years_experience: parsedSections.minimum_years_experience || Number(reqText.match(/\b(?:minimum|min\.?|at least)\s+(\d{1,2})\+?\s+years?\b/i)?.[1] || reqText.match(/\b(\d{1,2})\+?\s+years?\s+(?:of\s+)?(?:relevant|professional|general|specific)?\s*experience\b/i)?.[1] || 0) || undefined,
-    general_experience: parsedSections.general_experience || clean(reqText.match(/\bgeneral experience\s*[:\-]?\s*(.+?)(?=\bspecific experience\b|\b(?:role\s*&\s*responsibilities|role description|responsibilities|duties|tasks|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || "") || experienceSection || firstExperienceSentence,
-    specific_experience: parsedSections.specific_experience || clean(reqText.match(/\bspecific experience\s*[:\-]?\s*(.+?)(?=\b(?:role\s*&\s*responsibilities|role description|responsibilities|duties|tasks|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
-    role_description: clean(reqText.match(/\b(?:role\s*&\s*responsibilities|role description|responsibilities|tasks|duties|scope of work)\s*[:\-]?\s*(.+?)(?=\b(?:general experience|specific experience|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || "") || firstResponsibilitySentence || parsedSections.role_description || combinedRequirements,
+    general_experience: broadExperienceSection || parsedSections.general_experience || clean(reqText.match(/\bgeneral experience\s*[:\-]?\s*(.+?)(?=\bspecific experience\b|\b(?:role\s*&\s*responsibilities|role description|responsibilities|duties|tasks|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || "") || firstExperienceSentence,
+    specific_experience: specificExperienceSection || parsedSections.specific_experience || clean(reqText.match(/\bspecific experience\s*[:\-]?\s*(.+?)(?=\b(?:role\s*&\s*responsibilities|role description|responsibilities|duties|tasks|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || ""),
+    role_description: clean(reqText.match(/\b(?:role\s*&\s*responsibilities|role description|responsibilities|tasks|duties|scope of work)\s*[:\-]?\s*(.+?)(?=\b(?:general experience|specific experience|minimum education|qualification|skills?|location|position|job title)\b|$)/i)?.[1] || "") || firstResponsibilitySentence || parsedSections.role_description,
     required_sector_experience: [],
     mandatory_skills: Array.from(new Set((nearby.match(/\b(?:FIDIC|AutoCAD|Primavera|BIM|GIS|QA\/QC|HSE|PMP|laboratory|asphalt|earthworks?|survey|quantity|document control|contract management|site supervision)\b/gi) || []).map((item) => item.trim()))),
+    required_certifications: Array.from(new Set([
+      ...(parsedSections.required_certifications || []),
+      ...(registrationSection ? [registrationSection] : []),
+    ].filter(Boolean))),
     required_keywords: Array.from(new Set((nearby.match(/\b(?:roads?|bridges?|water|wastewater|buildings?|infrastructure|construction|supervision|design|drainage|pavement|utilities|geotechnical|materials?|laboratory|asphalt|earthworks?|survey|quantity|document control)\b/gi) || []).map((item) => item.trim()))),
     nationality_preference: /\bomani only\b|\bnational only\b/i.test(`${line} ${nearby}`) ? "Omani only" : "",
     recovered_from_text: true,
@@ -1059,6 +1063,60 @@ export function extractRawKeyExpertEvaluationPositions(rawText: string) {
   }).filter((position) => isLikelyTenderPosition(position.position_title) && (position.minimum_education || position.general_experience));
 }
 
+export function extractNumberedExpertQualificationRows(rawText: string) {
+  const source = normalizeRawText(rawText);
+  const rowPattern = /(?:^|\n)\s*(\d{1,2})\.\s+([\s\S]{1,180}?)\n\s*Education\s*:?\s*\n?([\s\S]*?)(?=\n\s*\d{1,2}\.\s+[\s\S]{1,180}?\n\s*Education\s*:?|$)/gi;
+  const positions: any[] = [];
+  const compact = (value: any) => clean(String(value || "")
+    .replace(/\n\s*\d+(?:\.\d+)?\s*\n(?=---\s*PAGE)/gi, "\n")
+    .replace(/---\s*PAGE\s+\d+\s*---\s*\d+\s*Section\s+\d+\s*:\s*Terms of Reference\s*Official Use Only/gi, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+
+  for (const match of source.matchAll(rowPattern)) {
+    const title = normalizePositionTitle(compact(match[2]));
+    if (!isLikelyTenderPosition(title)) continue;
+
+    const requirementBlock = String(match[3] || "");
+    const experienceMarker = requirementBlock.search(/(?:^|\n)\s*[•-]?\s*Experience\s*:?\s*(?:\n|$)/i);
+    if (experienceMarker < 0) continue;
+    const registrationMarker = requirementBlock.search(/(?:^|\n)\s*Professional Registration\s*:?\s*(?:\n|$)/i);
+    const education = compact(requirementBlock.slice(0, experienceMarker).replace(/^[•-]\s*/, ""));
+    const experienceStart = requirementBlock.slice(experienceMarker).search(/Experience\s*:?/i) + experienceMarker;
+    const experience = compact(requirementBlock.slice(
+      experienceStart + (requirementBlock.slice(experienceStart).match(/^Experience\s*:?/i)?.[0].length || 0),
+      registrationMarker >= 0 ? registrationMarker : requirementBlock.length,
+    ));
+    const experienceParts = experience
+      .split(/(?=\bExperience\s+as\b)/i)
+      .map((part) => compact(part.replace(/^[•-]\s*/, "").replace(/[•-]\s*$/, "")))
+      .filter(Boolean);
+    const registration = registrationMarker >= 0
+      ? compact(requirementBlock.slice(registrationMarker).split(/\n---\s*PAGE\s+\d+\s*---/i)[0].replace(/^\s*Professional Registration\s*:?/i, "").replace(/\s+\d+(?:\.\d+)?\s*$/, ""))
+      : "";
+    const rowBeforeNextPage = requirementBlock.split(/\n---\s*PAGE\s+\d+\s*---/i)[0];
+    const inputMonths = Number(rowBeforeNextPage.match(/(?:^|\n)\s*(\d+(?:\.\d+)?)\s*$/)?.[1] || 0) || undefined;
+
+    positions.push({
+      position_title: title,
+      source_position_number: Number(match[1]),
+      minimum_education: education,
+      minimum_years_experience: parseYearsFromRequirement(experience),
+      general_experience: experienceParts[0] || experience,
+      specific_experience: experienceParts.slice(1).join(" "),
+      role_description: "",
+      input_months: inputMonths,
+      is_key_expert: true,
+      expert_category: "Key staff",
+      required_certifications: registration ? [registration] : [],
+      recovered_from_text: true,
+      recovery_source: "numbered_expert_qualification_table",
+    });
+  }
+
+  return positions;
+}
+
 function extractLooseRoleListPositions(lines: TextLine[]) {
   const positions: any[] = [];
   const seen = new Set<string>();
@@ -1108,6 +1166,7 @@ export function extractUniversalTenderFacts(rawText: string): UniversalTenderFac
 
   const structuredPositions = [
     ...extractRawKeyExpertEvaluationPositions(rawText),
+    ...extractNumberedExpertQualificationRows(rawText),
     ...enrichPositionsFromBlocks(keyExpertRows, lines),
     ...extractPersonnelTablePositions(lines),
     ...extractGenericStaffTablePositions(lines, rawText),

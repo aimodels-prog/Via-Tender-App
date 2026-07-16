@@ -937,6 +937,114 @@ function postProcessTenderExtraction(parsed: any, rawText: string) {
   });
 }
 
+export function enrichTenderExtractionFromSourceText(
+  tender: any,
+  rawText: string,
+  pageTexts: Array<{ page_number: number; text: string }> = [],
+) {
+  const recoveredPositions = extractUniversalTenderFacts(rawText).positions || [];
+  const canonicalTitle = (value: any) => normalizePositionTitle(value || "")
+    .toLowerCase()
+    .replace(/\bsignalling\b/g, "signaling")
+    .replace(/\btelecommunications\b/g, "telecommunication")
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const titleCompatible = (left: any, right: any) => {
+    const a = canonicalTitle(left);
+    const b = canonicalTitle(right);
+    if (!a || !b) return false;
+    if (a === b || a.includes(b) || b.includes(a)) return true;
+    const aTokens = new Set(a.split(" ").filter((token) => token.length > 2));
+    const bTokens = new Set(b.split(" ").filter((token) => token.length > 2));
+    const intersection = [...aTokens].filter((token) => bTokens.has(token)).length;
+    return intersection >= 2 && intersection / Math.max(aTokens.size, bTokens.size) >= 0.6;
+  };
+  const findRecovered = (position: any) => {
+    const sourceNumber = Number(position?.source_position_number || 0);
+    return recoveredPositions
+      .filter((candidate: any) => titleCompatible(position?.position_title, candidate?.position_title))
+      .sort((left: any, right: any) => {
+        const leftNumberMatch = sourceNumber > 0 && Number(left?.source_position_number || 0) === sourceNumber ? 1 : 0;
+        const rightNumberMatch = sourceNumber > 0 && Number(right?.source_position_number || 0) === sourceNumber ? 1 : 0;
+        return rightNumberMatch - leftNumberMatch;
+      })[0];
+  };
+  const richerAcademicText = (current: any, recovered: any) => {
+    const existing = cleanTenderLine(current);
+    const source = cleanTenderLine(recovered);
+    if (!source) return existing;
+    const academic = /\b(?:bachelor|master|degree|diploma|b\.?\s*sc|m\.?\s*sc|ph\.?\s*d)\b/i;
+    if (!existing || (academic.test(source) && !academic.test(existing))) return source;
+    return existing;
+  };
+  const fillText = (current: any, recovered: any) => cleanTenderLine(current) || cleanTenderLine(recovered);
+  const evidenceForRecoveredFields = (position: any, recovered: any, recoveredFields: string[]) => {
+    const titleTokens = canonicalTitle(position?.position_title).split(" ").filter((token) => token.length > 3);
+    const requirementTokens = canonicalTitle([
+      recovered?.minimum_education,
+      recovered?.general_experience,
+      recovered?.specific_experience,
+      ...(Array.isArray(recovered?.required_certifications) ? recovered.required_certifications : []),
+    ].filter(Boolean).join(" ")).split(" ").filter((token) => token.length > 4);
+    const page = pageTexts
+      .map((candidate) => {
+      const searchable = canonicalTitle(candidate.text);
+        const titleHits = titleTokens.filter((token) => searchable.includes(token)).length;
+        const requirementHits = requirementTokens.filter((token) => searchable.includes(token)).length;
+        return { candidate, titleHits, score: (titleHits * 3) + requirementHits };
+      })
+      .filter(({ titleHits }) => titleTokens.length > 0 && titleHits >= Math.min(2, titleTokens.length))
+      .sort((left, right) => right.score - left.score)[0]?.candidate;
+    if (!page) return position;
+    const existingEvidence = Array.isArray(position?.field_evidence) ? position.field_evidence : [];
+    const evidenceFields = new Set(existingEvidence.map((item: any) => String(item?.field || "").toLowerCase()));
+    const additions = recoveredFields
+      .filter((field) => !evidenceFields.has(field) && String(position?.[field] || "").trim())
+      .map((field) => ({ field, page_number: page.page_number, quote: String(recovered?.[field] || position[field]).trim() }));
+    return {
+      ...position,
+      source_page_numbers: Array.from(new Set([...(position?.source_page_numbers || []), page.page_number])).sort((a: number, b: number) => a - b),
+      field_evidence: [...existingEvidence, ...additions],
+    };
+  };
+
+  return {
+    ...tender,
+    positions: (Array.isArray(tender?.positions) ? tender.positions : []).map((position: any) => {
+      const recovered = findRecovered(position);
+      if (!recovered) return position;
+      const evidenceFields = new Set((Array.isArray(position?.field_evidence) ? position.field_evidence : [])
+        .map((item: any) => String(item?.field || "").toLowerCase()));
+      const unsupportedDefaultQuantity = Number(position?.quantity) === 1 &&
+        !evidenceFields.has("quantity") &&
+        String(recovered?.recovery_source || "").includes("numbered_expert_qualification_table");
+      const merged = {
+        ...position,
+        quantity: unsupportedDefaultQuantity ? undefined : position.quantity,
+        input_months: Number(position?.input_months || 0) || Number(recovered?.input_months || 0) || undefined,
+        is_key_expert: Boolean(position?.is_key_expert || recovered?.is_key_expert),
+        expert_category: fillText(position?.expert_category, recovered?.expert_category),
+        minimum_education: richerAcademicText(position.minimum_education, recovered.minimum_education),
+        minimum_years_experience: Math.max(
+          Number(position.minimum_years_experience || 0),
+          Number(recovered.minimum_years_experience || 0),
+        ) || undefined,
+        general_experience: fillText(position.general_experience, recovered.general_experience),
+        specific_experience: fillText(position.specific_experience, recovered.specific_experience),
+        required_certifications: Array.from(new Set([
+          ...(Array.isArray(position.required_certifications) ? position.required_certifications : []),
+          ...(Array.isArray(recovered.required_certifications) ? recovered.required_certifications : []),
+        ].map(cleanTenderLine).filter(Boolean))),
+        source_text_enriched: true,
+      };
+      const recoveredFields = ["input_months", "minimum_education", "minimum_years_experience", "general_experience", "specific_experience"]
+        .filter((field) => !String(position?.[field] || "").trim() && String(merged?.[field] || "").trim());
+      return evidenceForRecoveredFields(merged, recovered, recoveredFields);
+    }),
+  };
+}
+
 function prepareTenderPromptText(rawText: string) {
   const text = String(rawText || "");
   const maxChars = 90000;
@@ -3002,21 +3110,26 @@ Attach field_evidence to every populated field. Keep roles separate by lot, posi
       (item.extraction_routing?.weak_text_layer_pages || []).forEach((page: any) => weakTextLayerPageSet.add(Number(page)));
       (item.page_classifications || []).forEach((classification: any) => classifierPageSet.add(Number(classification.page_number)));
     });
-    const mergedSegmentExtraction = mergeTenderExtractions(extracted);
+    const fullSourceText = sourcePageTextsToTenderText(sourcePageTexts);
+    const mergedSegmentExtraction = enrichTenderExtractionFromSourceText(
+      mergeTenderExtractions(extracted),
+      fullSourceText,
+      sourcePageTexts,
+    );
     const positionFirstExtraction = await repairTenderRolesFromFullDocumentContext(
       mergedSegmentExtraction,
-      sourcePageTextsToTenderText(sourcePageTexts),
+      fullSourceText,
       modelNames,
     );
     const auditedExtraction = await auditTenderExtractionWithAI(
       positionFirstExtraction,
-      sourcePageTextsToTenderText(sourcePageTexts),
+      fullSourceText,
       modelNames,
     );
     const finalizedExtraction = await finalizeTenderExtraction([auditedExtraction], modelNames);
     const postFinalRepair = await repairTenderRolesFromFullDocumentContext(
       finalizedExtraction,
-      sourcePageTextsToTenderText(sourcePageTexts),
+      fullSourceText,
       modelNames,
     );
     postFinalRepair.positions = (postFinalRepair.positions || []).map((position: any) => {
@@ -3027,7 +3140,8 @@ Attach field_evidence to every populated field. Keep roles separate by lot, posi
         role_duties_status: "not_stated",
       };
     });
-    const tender = normalizeTenderRecord(reconcileTenderEvidencePages(postFinalRepair, sourcePageTexts));
+    const sourceEnrichedExtraction = enrichTenderExtractionFromSourceText(postFinalRepair, fullSourceText, sourcePageTexts);
+    const tender = normalizeTenderRecord(reconcileTenderEvidencePages(sourceEnrichedExtraction, sourcePageTexts));
     if (tender.positions.length !== postFinalRepair.positions.length) {
       tender.extraction_warnings = Array.from(new Set([
         ...(tender.extraction_warnings || []),
