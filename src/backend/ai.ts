@@ -3014,11 +3014,24 @@ Attach field_evidence to every populated field. Keep roles separate by lot, posi
       modelNames,
     );
     const finalizedExtraction = await finalizeTenderExtraction([auditedExtraction], modelNames);
-    const tender = normalizeTenderRecord(reconcileTenderEvidencePages(finalizedExtraction, sourcePageTexts));
-    if (tender.positions.length !== finalizedExtraction.positions.length) {
+    const postFinalRepair = await repairTenderRolesFromFullDocumentContext(
+      finalizedExtraction,
+      sourcePageTextsToTenderText(sourcePageTexts),
+      modelNames,
+    );
+    postFinalRepair.positions = (postFinalRepair.positions || []).map((position: any) => {
+      if (String(position?.role_description || "").trim()) return position;
+      return {
+        ...position,
+        role_description: "",
+        role_duties_status: "not_stated",
+      };
+    });
+    const tender = normalizeTenderRecord(reconcileTenderEvidencePages(postFinalRepair, sourcePageTexts));
+    if (tender.positions.length !== postFinalRepair.positions.length) {
       tender.extraction_warnings = Array.from(new Set([
         ...(tender.extraction_warnings || []),
-        `Final synthesis returned ${finalizedExtraction.positions.length} position records; validation kept ${tender.positions.length} distinct valid role(s). Review the cleaned position list.`,
+        `Final synthesis returned ${postFinalRepair.positions.length} position records; validation kept ${tender.positions.length} distinct valid role(s). Review the cleaned position list.`,
       ]));
       tender.review_required = true;
     }

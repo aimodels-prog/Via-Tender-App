@@ -34,7 +34,7 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
   const [warningsAcknowledged, setWarningsAcknowledged] = useState(false);
   const normalizedForReview = useMemo(() => normalizeTenderRecord(editedTender), [editedTender]);
   const blockingIssues = toArray(normalizedForReview.extraction_blocking_issues);
-  const isTechnicalAuditWarning = (warning: string) => /(?:source page evidence|field-level evidence|no (?:tender )?field evidence|without matching field_evidence|missing evidence for)/i.test(warning);
+  const isTechnicalAuditWarning = (warning: string) => /(?:source page evidence|field-level evidence|no (?:tender )?field evidence|without matching field_evidence|missing evidence for|missing core requirements|quantity was not found|education requirement was not extracted|experience requirements were not extracted|responsibilities (?:were not extracted|need review)|no role_description)/i.test(warning);
   const positionWarnings = useMemo(
     () => normalizedForReview.positions.map((position: any) => getTenderPositionWarnings(position).filter((warning) => !isTechnicalAuditWarning(warning))),
     [normalizedForReview.positions],
