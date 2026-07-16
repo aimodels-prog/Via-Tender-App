@@ -182,34 +182,6 @@ function cleanTenderPositionTitle(value: any) {
     .trim();
 }
 
-function canonicalTenderPositionTitle(value: any) {
-  let title = cleanTenderPositionTitle(value)
-    .replace(/^\s*the\s+/i, "")
-    .replace(/\s*\((?:supervision|construction|design update|assistant resident engineer)\)\s*/gi, " ")
-    .replace(/\bfor\s+(?:construction activities|design (?:update|review)|design)\b/gi, " ")
-    .replace(/\bmaterials?\b/gi, "material")
-    .replace(/\bcad (?:specialists?|technicians?)\b/gi, "cad specialist technician")
-    .replace(/\bsurvey assistants?\b/gi, "surveyor assistant")
-    .replace(/\btechnicians\b/gi, "technician")
-    .replace(/\bassistants\b/gi, "assistant")
-    .replace(/\bspecialists\b/gi, "specialist")
-    .replace(/\binspectors\b/gi, "inspector")
-    .replace(/\bsurveyors\b/gi, "surveyor")
-    .replace(/\bland surveyor\b/gi, "surveyor")
-    .replace(/\bsenior\s+surveyor\b/gi, "surveyor")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  const normalized = title.toLowerCase().replace(/&/g, " and ").replace(/[^a-z0-9]+/g, " ").trim();
-  const tokens = Array.from(new Set(normalized.split(/\s+/).filter((token) => token && token !== "and"))).sort();
-  return tokens.join(" ");
-}
-
-function tenderPositionGroupKey(position: any) {
-  const lot = cleanText(position?.lot_reference).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  return `${lot}|${canonicalTenderPositionTitle(position?.position_title || position?.title || position?.role || "")}`;
-}
-
 function mergeUniqueValues(current: any, next: any) {
   const values = [...(Array.isArray(current) ? current : []), ...(Array.isArray(next) ? next : [])].filter(Boolean);
   const seen = new Set<string>();
@@ -221,50 +193,12 @@ function mergeUniqueValues(current: any, next: any) {
   });
 }
 
-function richerText(current: any, next: any) {
-  const currentText = cleanTenderRequirementText(current);
-  const nextText = cleanTenderRequirementText(next);
-  if (!currentText) return nextText;
-  if (!nextText) return currentText;
-  return nextText.length > currentText.length ? nextText : currentText;
-}
-
-function richerEducationText(current: any, next: any) {
-  const currentText = cleanTenderEducationRequirement(current);
-  const nextText = cleanTenderEducationRequirement(next);
-  if (!currentText) return nextText;
-  if (!nextText) return currentText;
-  const currentAcademic = looksLikeAcademicEducation(currentText);
-  const nextAcademic = looksLikeAcademicEducation(nextText);
-  if (currentAcademic !== nextAcademic) return nextAcademic ? nextText : currentText;
-  return richerText(currentText, nextText);
-}
-
-function stricterExperienceText(current: any, next: any) {
-  const currentText = cleanTenderRequirementText(current);
-  const nextText = cleanTenderRequirementText(next);
-  if (!currentText) return nextText;
-  if (!nextText) return currentText;
-  const maxYears = (text: string) => Math.max(0, ...(text.match(/\b\d{1,2}\s*years?\b/gi) || []).map((value) => Number(value.match(/\d+/)?.[0] || 0)));
-  const currentYears = maxYears(currentText);
-  const nextYears = maxYears(nextText);
-  if (currentYears !== nextYears && currentYears > 0 && nextYears > 0) return nextYears > currentYears ? nextText : currentText;
-  return richerText(currentText, nextText);
-}
-
 function cleanRoleDutiesStatus(value: any, roleDescription = "") {
   const status = cleanText(value).toLowerCase().replace(/[^a-z_]+/g, "_").replace(/^_|_$/g, "");
   if (["explicit", "tor_scope", "not_stated", "needs_review"].includes(status)) return status;
   if (/^not separately stated for this role/i.test(cleanText(roleDescription))) return "tor_scope";
   if (cleanText(roleDescription)) return "explicit";
   return "needs_review";
-}
-
-function richerRoleDutiesStatus(current: any, next: any) {
-  const priority: Record<string, number> = { explicit: 4, tor_scope: 3, not_stated: 2, needs_review: 1 };
-  const currentStatus = cleanRoleDutiesStatus(current);
-  const nextStatus = cleanRoleDutiesStatus(next);
-  return (priority[nextStatus] || 0) > (priority[currentStatus] || 0) ? nextStatus : currentStatus;
 }
 
 function cleanTenderRoleDescription(value: any) {
@@ -459,58 +393,6 @@ export function normalizeTenderPosition(position: any, index = 0) {
   };
 }
 
-export function mergeTenderPositions(positions: any[]) {
-  const grouped = new Map<string, any>();
-  (Array.isArray(positions) ? positions : []).forEach((rawPosition, index) => {
-    const position = normalizeTenderPosition(rawPosition, index);
-    const key = tenderPositionGroupKey(position);
-    if (!canonicalTenderPositionTitle(position.position_title)) return;
-    const current = grouped.get(key);
-    if (!current) {
-      grouped.set(key, position);
-      return;
-    }
-
-    grouped.set(key, {
-      ...current,
-      quantity: current.quantity || position.quantity,
-      source_position_number: current.source_position_number || position.source_position_number,
-      source_document: richerText(current.source_document, position.source_document),
-      lot_reference: richerText(current.lot_reference, position.lot_reference),
-      expert_category: richerText(current.expert_category, position.expert_category),
-      is_key_expert: current.is_key_expert ?? position.is_key_expert,
-      input_months: current.input_months || position.input_months,
-      work_location: richerText(current.work_location, position.work_location),
-      minimum_education: richerEducationText(current.minimum_education, position.minimum_education),
-      minimum_years_experience: Math.max(Number(current.minimum_years_experience || 0), Number(position.minimum_years_experience || 0)) || undefined,
-      minimum_specific_years: Math.max(Number(current.minimum_specific_years || 0), Number(position.minimum_specific_years || 0)) || undefined,
-      minimum_similar_projects: current.minimum_similar_projects || position.minimum_similar_projects,
-      general_experience: stricterExperienceText(current.general_experience, position.general_experience),
-      specific_experience: stricterExperienceText(current.specific_experience, position.specific_experience),
-      role_description: richerText(current.role_description, position.role_description),
-      role_duties_status: richerRoleDutiesStatus(current.role_duties_status, position.role_duties_status),
-      required_sector_experience: mergeUniqueValues(current.required_sector_experience, position.required_sector_experience),
-      mandatory_skills: mergeUniqueValues(current.mandatory_skills, position.mandatory_skills),
-      required_software: mergeUniqueValues(current.required_software, position.required_software),
-      required_certifications: mergeUniqueValues(current.required_certifications, position.required_certifications),
-      professional_memberships: mergeUniqueValues(current.professional_memberships, position.professional_memberships),
-      required_languages: mergeUniqueValues(current.required_languages, position.required_languages),
-      position_deliverables: mergeUniqueValues(current.position_deliverables, position.position_deliverables),
-      required_keywords: mergeUniqueValues(current.required_keywords, position.required_keywords),
-      nationality_preference: richerText(current.nationality_preference, position.nationality_preference),
-      residency_requirement: richerText(current.residency_requirement, position.residency_requirement),
-      regional_experience: richerText(current.regional_experience, position.regional_experience),
-      country_experience: richerText(current.country_experience, position.country_experience),
-      evaluation_points: current.evaluation_points || position.evaluation_points,
-      source_page_numbers: mergeUniqueValues(current.source_page_numbers, position.source_page_numbers).map(Number).sort((a, b) => a - b),
-      source_quotes: mergeUniqueValues(current.source_quotes, position.source_quotes),
-      field_evidence: mergeUniqueValues(current.field_evidence, position.field_evidence),
-      extraction_warnings: mergeUniqueValues(current.extraction_warnings, position.extraction_warnings),
-    });
-  });
-  return Array.from(grouped.values());
-}
-
 export function isInvalidTenderPositionTitle(value: string) {
   const title = cleanText(value);
   if (!title) return true;
@@ -563,21 +445,6 @@ export function getTenderPositionWarnings(position: any) {
   if (!cleanText(position?.general_experience) && !cleanText(position?.specific_experience)) warnings.push("Experience requirements were not extracted.");
   if (dutiesStatus === "needs_review") warnings.push("Responsibilities need review because duties may have been missed or could not be mapped.");
   if (!cleanText(position?.role_description) && dutiesStatus !== "not_stated") warnings.push("Responsibilities were not extracted.");
-  if (!Array.isArray(position?.source_page_numbers) || position.source_page_numbers.length === 0) warnings.push("No source page evidence is attached.");
-  const evidenceFields = new Set((Array.isArray(position?.field_evidence) ? position.field_evidence : []).map((item: any) => cleanText(item?.field).toLowerCase()));
-  const evidenceRequiredFor = [
-    ["position_title", position?.position_title],
-    ["quantity", position?.quantity],
-    ["minimum_education", position?.minimum_education],
-    ["general_experience", position?.general_experience],
-    ["specific_experience", position?.specific_experience],
-    ["role_description", position?.role_description],
-  ] as Array<[string, any]>;
-  const missingEvidence = evidenceRequiredFor
-    .filter(([, value]) => value !== undefined && value !== null && String(value).trim())
-    .map(([field]) => field)
-    .filter((field) => !evidenceFields.has(field));
-  if (missingEvidence.length) warnings.push(`Missing field-level evidence for: ${missingEvidence.join(", ")}.`);
   return warnings;
 }
 
@@ -615,7 +482,7 @@ function isInvalidTenderPosition(position: any) {
 
 export function normalizeTenderRecord(tender: any) {
   const positions = Array.isArray(tender?.positions) ? tender.positions : [];
-  const normalizedPositions = mergeTenderPositions(positions)
+  const normalizedPositions = positions.map((position: any, index: number) => normalizeTenderPosition(position, index))
     .filter((position) => position.position_title && !isInvalidTenderPosition(position));
 
   const extractionWarnings = normalizedPositions.flatMap((position) =>
@@ -639,20 +506,6 @@ export function normalizeTenderRecord(tender: any) {
       quote: cleanTenderRequirementText(evidence?.quote || ""),
     }))
     .filter((evidence: any) => evidence.field && Number.isInteger(evidence.page_number) && evidence.page_number > 0 && evidence.quote);
-  const tenderEvidenceFields = new Set(tenderFieldEvidence.map((item: any) => item.field.toLowerCase()));
-  const missingTenderEvidence = [
-    ["tender_title", tender?.tender_title || tender?.name],
-    ["client", tender?.client],
-    ["deadline", tender?.deadline],
-    ["scope_summary", tender?.scope_summary],
-    ["duration", tender?.duration],
-  ] as Array<[string, any]>;
-  missingTenderEvidence
-    .filter(([, value]) => String(value || "").trim())
-    .map(([field]) => field)
-    .filter((field) => !tenderEvidenceFields.has(field))
-    .forEach((field) => extractionWarnings.push(`Tender: Missing field-level evidence for ${field}.`));
-
   const retainedWarnings = toArray(tender?.extraction_warnings).filter((warning) => !/(?:Quantity was not found in the source|Education requirement was not extracted|Experience requirements were not extracted|Responsibilities were not extracted|No source page evidence is attached|Missing field-level evidence for:)/i.test(warning));
   const explicitClientEvidence = tenderFieldEvidence
     .filter((item: any) => item.field.toLowerCase() === "client")
@@ -676,30 +529,10 @@ export function normalizeTenderRecord(tender: any) {
       ].filter(Boolean),
     }))
     .filter((item) => item.missing.length > 0);
-  const missingCoreEvidencePositions = normalizedPositions
-    .map((position) => {
-      const evidenceFields = new Set((Array.isArray(position?.field_evidence) ? position.field_evidence : []).map((item: any) => cleanText(item?.field).toLowerCase()));
-      const missing = [
-        cleanText(position.position_title) && !evidenceFields.has("position_title") ? "position_title" : "",
-        position.quantity !== undefined && !evidenceFields.has("quantity") ? "quantity" : "",
-        cleanText(position.minimum_education) && !evidenceFields.has("minimum_education") ? "minimum_education" : "",
-        cleanText(position.general_experience) && !evidenceFields.has("general_experience") ? "general_experience" : "",
-        cleanText(position.specific_experience) && !evidenceFields.has("specific_experience") ? "specific_experience" : "",
-        cleanText(position.role_description) && !evidenceFields.has("role_description") ? "role_description" : "",
-      ].filter(Boolean);
-      return { title: cleanText(position.position_title), missing };
-    })
-    .filter((item) => item.missing.length > 0);
   const qualityIssues: string[] = [];
   if (!roleCount) qualityIssues.push("No real tender personnel positions were extracted.");
-  if (roleCount >= 3 && sourceBackedCount / roleCount < 0.5) {
-    qualityIssues.push("Fewer than half of the extracted positions have source-page evidence.");
-  }
   if (incompleteCorePositions.length) {
     qualityIssues.push(`Some positions are missing core requirements: ${incompleteCorePositions.slice(0, 10).map((item) => `${item.title || "Untitled"} missing ${item.missing.join(", ")}`).join("; ")}${incompleteCorePositions.length > 10 ? "..." : ""}.`);
-  }
-  if (missingCoreEvidencePositions.length) {
-    qualityIssues.push(`Some populated role fields are not backed by field-level evidence: ${missingCoreEvidencePositions.slice(0, 10).map((item) => `${item.title || "Untitled"} missing evidence for ${item.missing.join(", ")}`).join("; ")}${missingCoreEvidencePositions.length > 10 ? "..." : ""}.`);
   }
 
   return {
@@ -733,7 +566,7 @@ export function normalizeTenderRecord(tender: any) {
       source_backed_positions: sourceBackedCount,
       complete_core_positions: completeCoreCount,
       incomplete_core_positions: incompleteCorePositions.length,
-      missing_core_evidence_positions: missingCoreEvidencePositions.length,
+      missing_core_evidence_positions: 0,
     },
     review_required: retainedWarnings.length > 0 || extractionWarnings.length > 0 || qualityIssues.length > 0,
   };

@@ -1149,7 +1149,7 @@ async function startServer() {
         `update parse_jobs set status = 'processing', progress = 10, updated_at = now() where id = $1`,
         [jobId],
       );
-      const { runParseTenderText } = await import("./src/backend/ai.ts");
+      const { runParseTenderText } = await import("./src/backend/tenderExtraction.ts");
       const tender = await runParseTenderText(originalTenderText);
       tender.original_tender_text = originalTenderText;
       tender.original_tender_text_length = originalTenderText.length;
@@ -1182,7 +1182,7 @@ async function startServer() {
   async function runTenderPdfParseJob(jobId: string, files: Express.Multer.File[]) {
     try {
       await query(`update parse_jobs set status = 'processing', progress = 10, updated_at = now() where id = $1`, [jobId]);
-      const { runParseTenderPdfFiles } = await import("./src/backend/ai.ts");
+      const { runParseTenderPdfFiles } = await import("./src/backend/tenderExtraction.ts");
       const tender = await runParseTenderPdfFiles(files.map((file) => ({
         path: file.path,
         originalname: file.originalname,
@@ -1221,7 +1221,7 @@ async function startServer() {
       await query(
         `insert into parse_jobs (id, user_id, type, status, progress, input) values ($1, $2, 'tender', 'queued', 0, $3::jsonb)`,
         [jobId, req.user?.id || null, JSON.stringify({
-          extractionMode: "native-pdf-vision",
+          extractionMode: "page-aware-flash",
           files: files.map((file) => ({ name: file.originalname, size: file.size })),
           startedAt: new Date().toISOString(),
         })],
