@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Save, AlertCircle, Loader2, Image as ImageIcon, Plus, Trash2 } from 'lucide-react';
+import { X, Save, AlertCircle, Loader2, Image as ImageIcon, Plus, Trash2, ChevronDown } from 'lucide-react';
 import clsx from 'clsx';
 import { api } from '../lib/api';
 import { getTenderPositionWarnings, normalizeTenderRecord } from '../lib/tenderPostProcess';
@@ -14,6 +14,7 @@ interface ConfirmTenderModalProps {
 const toArray = (value: any): string[] => Array.isArray(value) ? value.map(item => String(item || '').trim()).filter(Boolean) : value ? [String(value).trim()].filter(Boolean) : [];
 const joinLines = (value: any) => toArray(value).join('\n');
 const splitLines = (value: string) => value.split('\n').map(item => item.trim()).filter(Boolean);
+const hasValue = (value: any) => Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && String(value).trim() !== '';
 
 export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderModalProps) {
   const [editedTender, setEditedTender] = useState({
@@ -209,7 +210,6 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
               ['tender_number', 'Tender Number'],
               ['deadline', 'Submission Deadline'],
               ['duration', 'Project Duration'],
-              ['submission_type', 'Submission Type'],
             ].map(([field, label]) => (
               <div className="space-y-2" key={field}>
                 <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">{label}</label>
@@ -239,45 +239,46 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
               />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Special Requirements</label>
-                <textarea
-                  value={joinLines(editedTender.special_requirements)}
-                  onChange={e => setEditedTender({ ...editedTender, special_requirements: splitLines(e.target.value) })}
-                  placeholder="One requirement per line"
-                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all min-h-[110px]"
-                />
-              </div>
-              <div className="space-y-2">
-                <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Global Team Constraints</label>
-                <textarea
-                  value={joinLines(editedTender.global_team_constraints)}
-                  onChange={e => setEditedTender({ ...editedTender, global_team_constraints: splitLines(e.target.value) })}
-                  placeholder="One team-level constraint per line"
-                  className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all min-h-[110px]"
-                />
-              </div>
+            <div className="space-y-2">
+              <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Global Team Constraints</label>
+              <textarea
+                value={joinLines(editedTender.global_team_constraints)}
+                onChange={e => setEditedTender({ ...editedTender, global_team_constraints: splitLines(e.target.value) })}
+                placeholder="One team-level constraint per line"
+                className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all min-h-[100px]"
+              />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {[
-                ['project_sector', 'Project Sectors'],
-                ['objectives', 'Objectives'],
-                ['deliverables', 'Deliverables'],
-                ['eligibility_requirements', 'Eligibility Requirements'],
-                ['evaluation_criteria', 'Evaluation Criteria'],
-              ].map(([field, label]) => (
-                <div className="space-y-2" key={field}>
-                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">{label}</label>
-                  <textarea
-                    value={joinLines((editedTender as any)[field])}
-                    onChange={e => setEditedTender({ ...editedTender, [field]: splitLines(e.target.value) })}
-                    placeholder="One item per line"
-                    className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none min-h-[100px]"
-                  />
+
+            <details className="group border-t border-slate-200 pt-3">
+              <summary className="flex cursor-pointer list-none items-center justify-between py-2 text-sm font-semibold text-slate-700">
+                Additional tender details
+                <ChevronDown size={17} className="transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">Submission Type</label>
+                  <input type="text" value={editedTender.submission_type || ''} placeholder="Not extracted" onChange={e => setEditedTender({ ...editedTender, submission_type: e.target.value })} className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 outline-none" />
                 </div>
-              ))}
-            </div>
+                {[
+                  ['special_requirements', 'Special Requirements'],
+                  ['project_sector', 'Project Sectors'],
+                  ['objectives', 'Objectives'],
+                  ['deliverables', 'Tender Deliverables'],
+                  ['eligibility_requirements', 'Eligibility Requirements'],
+                  ['evaluation_criteria', 'Evaluation Criteria'],
+                ].map(([field, label]) => (
+                  <div className="space-y-2" key={field}>
+                    <label className="text-xs font-semibold text-slate-600 uppercase tracking-wider">{label}</label>
+                    <textarea
+                      value={joinLines((editedTender as any)[field])}
+                      onChange={e => setEditedTender({ ...editedTender, [field]: splitLines(e.target.value) })}
+                      placeholder="One item per line"
+                      className="w-full px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm focus:border-blue-500 outline-none min-h-[90px]"
+                    />
+                  </div>
+                ))}
+              </div>
+            </details>
 
           </div>
 
@@ -326,7 +327,7 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                       />
                     </div>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     <div className="space-y-1">
                       <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Years Exp Reqd.</label>
                       <input 
@@ -337,37 +338,6 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                         className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none"
                       />
                     </div>
-                    <div className="space-y-1">
-                      <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Nationality Quota</label>
-                      <input 
-                        type="text" 
-                        value={pos.nationality_preference || ''}
-                        placeholder="Not stated"
-                        onChange={e => handlePositionChange(idx, 'nationality_preference', e.target.value)}
-                        className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none"
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-                    {[
-                      ['lot_reference', 'Lot / Package', 'text'],
-                      ['input_months', 'Input Months', 'number'],
-                      ['work_location', 'Work Location', 'text'],
-                      ['minimum_specific_years', 'Specific Years', 'number'],
-                      ['minimum_similar_projects', 'Similar Projects', 'number'],
-                      ['evaluation_points', 'Evaluation Points', 'number'],
-                    ].map(([field, label, type]) => (
-                      <div className="space-y-1" key={field}>
-                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
-                        <input
-                          type={type}
-                          value={pos[field] ?? ''}
-                          placeholder="Not extracted"
-                          onChange={e => handlePositionChange(idx, field, type === 'number' ? (e.target.value ? Number(e.target.value) : undefined) : e.target.value)}
-                          className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none"
-                        />
-                      </div>
-                    ))}
                     <label className="flex items-center gap-2 text-sm text-slate-700 pt-5">
                       <input type="checkbox" checked={Boolean(pos.is_key_expert)} onChange={e => handlePositionChange(idx, 'is_key_expert', e.target.checked)} />
                       Key expert
@@ -410,40 +380,59 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                     />
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                    {[
-                      ['regional_experience', 'Regional Experience'],
-                      ['country_experience', 'Country Experience'],
-                    ].map(([field, label]) => (
-                      <div className="space-y-1" key={field}>
-                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
-                        <textarea value={pos[field] || ''} onChange={e => handlePositionChange(idx, field, e.target.value)} className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none min-h-[60px]" />
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-                    {[
-                      ['required_sector_experience', 'Required Sector Experience'],
-                      ['mandatory_skills', 'Mandatory Skills'],
-                      ['required_software', 'Required Software'],
-                      ['required_certifications', 'Required Certifications'],
-                      ['professional_memberships', 'Professional Memberships'],
-                      ['required_languages', 'Required Languages'],
-                      ['position_deliverables', 'Position Deliverables'],
-                      ['required_keywords', 'Required Keywords'],
-                    ].map(([field, label]) => (
-                      <div className="space-y-1" key={field}>
-                        <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
-                        <textarea
-                          value={joinLines(pos[field])}
-                          placeholder="One item per line"
-                          onChange={e => handlePositionChange(idx, field, splitLines(e.target.value))}
-                          className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none min-h-[70px]"
-                        />
-                      </div>
-                    ))}
-                  </div>
+                  <details className="group mt-4 border-t border-slate-200 pt-2">
+                    <summary className="flex cursor-pointer list-none items-center justify-between py-2 text-sm font-semibold text-slate-700">
+                      <span>Additional requirements ({[
+                        pos.nationality_preference, pos.lot_reference, pos.input_months, pos.work_location,
+                        pos.minimum_specific_years, pos.minimum_similar_projects, pos.evaluation_points,
+                        pos.regional_experience, pos.country_experience, pos.required_sector_experience,
+                        pos.mandatory_skills, pos.required_software, pos.required_certifications,
+                        pos.professional_memberships, pos.required_languages, pos.position_deliverables,
+                      ].filter(hasValue).length} populated)</span>
+                      <ChevronDown size={17} className="transition-transform group-open:rotate-180" />
+                    </summary>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-3">
+                      {[
+                        ['nationality_preference', 'Nationality Requirement', 'text'],
+                        ['lot_reference', 'Lot / Package', 'text'],
+                        ['input_months', 'Input Months', 'number'],
+                        ['work_location', 'Work Location', 'text'],
+                        ['minimum_specific_years', 'Specific Years', 'number'],
+                        ['minimum_similar_projects', 'Similar Projects', 'number'],
+                        ['evaluation_points', 'Evaluation Points', 'number'],
+                      ].map(([field, label, type]) => (
+                        <div className="space-y-1" key={field}>
+                          <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
+                          <input type={type} value={pos[field] ?? ''} placeholder="Not extracted" onChange={e => handlePositionChange(idx, field, type === 'number' ? (e.target.value ? Number(e.target.value) : undefined) : e.target.value)} className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none" />
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                      {[
+                        ['regional_experience', 'Regional Experience'],
+                        ['country_experience', 'Country Experience'],
+                      ].map(([field, label]) => (
+                        <div className="space-y-1" key={field}>
+                          <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
+                          <textarea value={pos[field] || ''} onChange={e => handlePositionChange(idx, field, e.target.value)} className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none min-h-[60px]" />
+                        </div>
+                      ))}
+                      {[
+                        ['required_sector_experience', 'Required Sector Experience'],
+                        ['mandatory_skills', 'Mandatory Skills'],
+                        ['required_software', 'Required Software'],
+                        ['required_certifications', 'Required Certifications'],
+                        ['professional_memberships', 'Professional Memberships'],
+                        ['required_languages', 'Required Languages'],
+                        ['position_deliverables', 'Position Deliverables'],
+                      ].map(([field, label]) => (
+                        <div className="space-y-1" key={field}>
+                          <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
+                          <textarea value={joinLines(pos[field])} placeholder="One item per line" onChange={e => handlePositionChange(idx, field, splitLines(e.target.value))} className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-md text-sm focus:border-blue-500 outline-none min-h-[70px]" />
+                        </div>
+                      ))}
+                    </div>
+                  </details>
 
                 </div>
               ))}
@@ -462,12 +451,13 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
             )}
           </div>
           
-          <div>
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Tender Branding</h3>
-            </div>
+          <details className="group border-t border-slate-200 pt-3">
+            <summary className="flex cursor-pointer list-none items-center justify-between py-2 text-sm font-semibold text-slate-700">
+              Document output settings
+              <ChevronDown size={17} className="transition-transform group-open:rotate-180" />
+            </summary>
 
-            <div className="mb-4 max-w-sm">
+            <div className="mb-4 mt-3 max-w-sm">
               <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block mb-1">Branding Source</label>
               <select
                 value={brandingSelection}
@@ -516,7 +506,7 @@ export function ConfirmTenderModal({ tender, onSave, onCancel }: ConfirmTenderMo
                 </p>
               </div>
             </div>
-          </div>
+          </details>
         </div>
 
         <div className="p-6 border-t border-slate-100 bg-white flex items-center justify-end gap-3">
